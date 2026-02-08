@@ -5,13 +5,15 @@ import { Input } from "@/components/ui/input"
 import { cn } from "@/lib/utils"
 
 const DungeonDice = React.lazy(() => import("@/components/dungeon-dice"))
+type DieSpec = { value: number; tint?: string }
 interface DiceOpts {
   label?: string
   title?: string
   comparison?: { text: string; success: boolean; successLabel: string; failLabel: string }
   onDone?: () => void
+  displayTotal?: number
 }
-type ShowDiceFn = (results: number[], opts?: DiceOpts) => void
+type ShowDiceFn = (results: DieSpec[], opts?: DiceOpts) => void
 
 /* ── Dice Helpers ── */
 function r1d6() { return Math.floor(Math.random() * 6) + 1 }
@@ -144,17 +146,17 @@ function Creation({ onCreate, log, showDice }: { onCreate: (sk: number, st: numb
     // Roll Skill: 1d6 + 6
     const sd = r1d6()
     const sk = sd + 6
-    showDice([sd], { title: "Create Hero", label: `Skill: 1d6 + 6 = ${sk}`, onDone: () => {
+    showDice([{ value: sd }], { title: "Create Hero", label: `Skill: 1d6 + 6 = ${sk}`, onDone: () => {
       setPartial(p => ({ ...p, sk, skRaw: sd }))
       setPhase("stamina")
       const std = r2d6()
       const st = std[0] + std[1] + 12
-      showDice([std[0], std[1]], { title: "Create Hero", label: `Stamina: 2d6 + 12 = ${st}`, onDone: () => {
+      showDice([{ value: std[0] }, { value: std[1] }], { title: "Create Hero", label: `Stamina: 2d6 + 12 = ${st}`, onDone: () => {
         setPartial(p => ({ ...p, st, stRaw: std }))
         setPhase("luck")
         const ld = r1d6()
         const l = ld + 6
-        showDice([ld], { title: "Create Hero", label: `Luck: 1d6 + 6 = ${l}`, onDone: () => {
+        showDice([{ value: ld }], { title: "Create Hero", label: `Luck: 1d6 + 6 = ${l}`, onDone: () => {
           setPartial(p => ({ ...p, l, lRaw: ld }))
           setPhase("done")
           setRolling(false)
@@ -336,36 +338,112 @@ function Combat({ s, d, showDice }: { s: GS; d: React.Dispatch<GA>; showDice: Sh
 
   function fight(useLuck: boolean) {
     if (!enemy || over || s.stamina <= 0) return
-    d({ type: "DANGER" })
-    const rd = round + 1; setRound(rd)
+    const rd = round + 1
     const hr = r2d6(), ht = hr[0] + hr[1] + s.skill + s.atkMod
     const er = r2d6(), et = er[0] + er[1] + enemy.skill
-    showDice([hr[0], hr[1]])
-    const lines: string[] = []
-    const modStr = s.atkMod !== 0 ? `+${s.atkMod}mod` : ""
-    lines.push(`R${rd}: You [${hr[0]}+${hr[1]}]+${s.skill}${modStr}=${ht} vs ${enemy.name} [${er[0]}+${er[1]}]+${enemy.skill}=${et}`)
-    if (ht > et) {
-      let dmg = 2
-      if (useLuck && s.luck > 0) {
-        const lr = r2d6(), lt = lr[0] + lr[1], lucky = lt <= s.luck
-        d({ type: "SET_LCK", v: s.luck - 1 }); dmg = lucky ? 4 : 1
-        lines.push(`Luck: [${lr[0]}+${lr[1]}]=${lt} vs ${s.luck} -- ${lucky ? "Lucky! 4dmg" : "Unlucky! 1dmg"}`)
-      }
-      const ns = Math.max(0, enemy.stamina - dmg); setEnemy({ ...enemy, stamina: ns })
-      lines.push(`Hit ${enemy.name} for ${dmg}! (${enemy.stamina}->${ns})`); log(`Hit ${enemy.name} for ${dmg}`, "success")
-      if (ns <= 0) { lines.push(`${enemy.name} defeated!`); log(`${enemy.name} defeated!`, "success"); setOver(true); if (queue.length > 0) lines.push(`Next: ${queue[0].name}`) }
-    } else if (et > ht) {
-      let dmg = 2
-      if (useLuck && s.luck > 0) {
-        const lr = r2d6(), lt = lr[0] + lr[1], lucky = lt <= s.luck
-        d({ type: "SET_LCK", v: s.luck - 1 }); dmg = lucky ? 1 : 3
-        lines.push(`Luck: [${lr[0]}+${lr[1]}]=${lt} vs ${s.luck} -- ${lucky ? "Lucky! 1dmg" : "Unlucky! 3dmg"}`)
-      }
-      d({ type: "SET_STA", v: s.stamina - dmg })
-      lines.push(`${enemy.name} hits for ${dmg}! (${s.stamina}->${Math.max(0, s.stamina - dmg)})`); log(`${enemy.name} hit you for ${dmg}`, "danger")
-      if (s.stamina - dmg <= 0) { lines.push("You have fallen..."); log("Defeated!", "danger"); setOver(true) }
-    } else { lines.push("Clash! No damage."); log("Tied -- no damage", "info") }
-    setRlog(p => [...lines, "---", ...p])
+    const modStr = s.atkMod !== 0 ? ` +${s.atkMod}mod` : ""
+
+    const heroWon = ht > et
+    const enemyWon = et > ht
+    const bannerSuccess = heroWon
+
+    const combatDice: DieSpec[] = [
+      { value: hr[0] }, { value: hr[1] },
+      { value: er[0], tint: "#3b1010" }, { value: er[1], tint: "#3b1010" },
+    ]
+
+    showDice(combatDice, {
+      title: `Combat Round ${rd}`,
+      label: `You ${ht} vs ${enemy.name} ${et}`,
+      comparison: {
+        text: `[${hr[0]}+${hr[1]}]+${s.skill}${modStr} = ${ht}  vs  [${er[0]}+${er[1]}]+${enemy.skill} = ${et}`,
+        success: bannerSuccess,
+        successLabel: "HIT!",
+        failLabel: enemyWon ? "WOUNDED!" : "CLASH!",
+      },
+      displayTotal: ht,
+      onDone: () => {
+        d({ type: "DANGER" })
+        setRound(rd)
+        const lines: string[] = []
+        lines.push(`R${rd}: You [${hr[0]}+${hr[1]}]+${s.skill}${modStr}=${ht} vs ${enemy.name} [${er[0]}+${er[1]}]+${enemy.skill}=${et}`)
+
+        if (heroWon) {
+          let dmg = 2
+          if (useLuck && s.luck > 0) {
+            const lr = r2d6(), lt = lr[0] + lr[1]
+            const curLuck = s.luck
+            const lucky = lt <= curLuck
+            dmg = lucky ? 4 : 1
+            const ns = Math.max(0, enemy.stamina - dmg)
+            // Show luck dice, defer state to luck onDone
+            showDice(lr.map(v => ({ value: v })), {
+              title: "Test Your Luck",
+              label: `Damage Luck: ${lt} vs Luck ${curLuck}`,
+              comparison: {
+                text: `${lt} vs ${curLuck}`,
+                success: lucky,
+                successLabel: "Lucky! 4 damage!",
+                failLabel: "Unlucky! 1 damage!",
+              },
+              onDone: () => {
+                d({ type: "SET_LCK", v: curLuck - 1 })
+                setEnemy({ ...enemy, stamina: ns })
+                lines.push(`Luck: [${lr[0]}+${lr[1]}]=${lt} vs ${curLuck} -- ${lucky ? "Lucky! 4dmg" : "Unlucky! 1dmg"}`)
+                lines.push(`Hit ${enemy.name} for ${dmg}! (${enemy.stamina}->${ns})`)
+                log(`Hit ${enemy.name} for ${dmg}`, "success")
+                if (ns <= 0) { lines.push(`${enemy.name} defeated!`); log(`${enemy.name} defeated!`, "success"); setOver(true) }
+                setRlog(p => [...lines, "---", ...p])
+              },
+            })
+            return
+          }
+          // No luck - apply immediately in this onDone
+          const ns = Math.max(0, enemy.stamina - dmg)
+          setEnemy({ ...enemy, stamina: ns })
+          lines.push(`Hit ${enemy.name} for ${dmg}! (${enemy.stamina}->${ns})`)
+          log(`Hit ${enemy.name} for ${dmg}`, "success")
+          if (ns <= 0) { lines.push(`${enemy.name} defeated!`); log(`${enemy.name} defeated!`, "success"); setOver(true) }
+        } else if (enemyWon) {
+          let dmg = 2
+          if (useLuck && s.luck > 0) {
+            const lr = r2d6(), lt = lr[0] + lr[1]
+            const curLuck = s.luck
+            const lucky = lt <= curLuck
+            dmg = lucky ? 1 : 3
+            const newSta = Math.max(0, s.stamina - dmg)
+            showDice(lr.map(v => ({ value: v })), {
+              title: "Test Your Luck",
+              label: `Defense Luck: ${lt} vs Luck ${curLuck}`,
+              comparison: {
+                text: `${lt} vs ${curLuck}`,
+                success: lucky,
+                successLabel: "Lucky! Only 1 damage!",
+                failLabel: "Unlucky! 3 damage!",
+              },
+              onDone: () => {
+                d({ type: "SET_LCK", v: curLuck - 1 })
+                d({ type: "SET_STA", v: newSta })
+                lines.push(`Luck: [${lr[0]}+${lr[1]}]=${lt} vs ${curLuck} -- ${lucky ? "Lucky! 1dmg" : "Unlucky! 3dmg"}`)
+                lines.push(`${enemy.name} hits for ${dmg}! (${s.stamina}->${newSta})`)
+                log(`${enemy.name} hit you for ${dmg}`, "danger")
+                if (newSta <= 0) { lines.push("You have fallen..."); log("Defeated!", "danger"); setOver(true) }
+                setRlog(p => [...lines, "---", ...p])
+              },
+            })
+            return
+          }
+          d({ type: "SET_STA", v: s.stamina - dmg })
+          lines.push(`${enemy.name} hits for ${dmg}! (${s.stamina}->${Math.max(0, s.stamina - dmg)})`)
+          log(`${enemy.name} hit you for ${dmg}`, "danger")
+          if (s.stamina - dmg <= 0) { lines.push("You have fallen..."); log("Defeated!", "danger"); setOver(true) }
+        } else {
+          lines.push("Clash! No damage.")
+          log("Tied -- no damage", "info")
+        }
+        setRlog(p => [...lines, "---", ...p])
+      },
+    })
   }
 
   return (
@@ -432,7 +510,7 @@ function Roller({ log, showDice }: { log: (t: string, ty: Log["type"]) => void; 
   const [res, setRes] = useState<number[] | null>(null)
   function roll(n: number) {
     const dice = Array.from({ length: n }, () => r1d6())
-    showDice(dice)
+    showDice(dice.map(v => ({ value: v })))
     setRes(dice)
     const total = dice.reduce((a, b) => a + b, 0)
     log(`Rolled ${n}d6: [${dice.join("+")}] = ${total}`, "info")
@@ -461,7 +539,7 @@ function Tests({ s, d, showDice }: { s: GS; d: React.Dispatch<GA>; showDice: Sho
   function testLuck() {
     const dice = r2d6()
     const total = dice[0] + dice[1], pass = total <= s.luck
-    showDice(dice, {
+    showDice(dice.map(v => ({ value: v })), {
       title: "Test Your Luck",
       label: `Roll 2d6 vs Luck ${s.luck}`,
       comparison: { text: `${total} vs ${s.luck}`, success: pass, successLabel: "Lucky!", failLabel: "Unlucky!" },
@@ -473,7 +551,7 @@ function Tests({ s, d, showDice }: { s: GS; d: React.Dispatch<GA>; showDice: Sho
   function testSkill() {
     const dice = r2d6()
     const total = dice[0] + dice[1], pass = total <= s.skill
-    showDice(dice, {
+    showDice(dice.map(v => ({ value: v })), {
       title: "Test Your Skill",
       label: `Roll 2d6 vs Skill ${s.skill}`,
       comparison: { text: `${total} vs ${s.skill}`, success: pass, successLabel: "Passed!", failLabel: "Failed!" },
@@ -633,7 +711,7 @@ export default function Page() {
   })
   const [tab, setTab] = useState<Tab>("explore")
   const addLog = useCallback((t: string, ty: Log["type"]) => d({ type: "LOG", text: t, lt: ty }), [])
-  const [diceModal, setDiceModal] = useState<{ results: number[] } & DiceOpts | null>(null)
+  const [diceModal, setDiceModal] = useState<{ results: DieSpec[] } & DiceOpts | null>(null)
 
   const showDice: ShowDiceFn = useCallback((results, opts) => setDiceModal({ results, ...opts }), [])
 
@@ -733,7 +811,7 @@ export default function Page() {
       {/* 3D Dice Modal */}
       {diceModal && (
         <Suspense fallback={<div className="fixed inset-0 z-[100] bg-black/80 flex items-center justify-center"><span className="text-amber-400 font-[Cinzel] text-lg animate-pulse">Loading dice...</span></div>}>
-          <DungeonDice targetResults={diceModal.results} label={diceModal.label} title={diceModal.title} comparison={diceModal.comparison} onComplete={() => { const cb = diceModal.onDone; setDiceModal(null); cb?.() }} />
+          <DungeonDice targetResults={diceModal.results} label={diceModal.label} title={diceModal.title} comparison={diceModal.comparison} displayTotal={diceModal.displayTotal} onComplete={() => { const cb = diceModal.onDone; setDiceModal(null); cb?.() }} />
         </Suspense>
       )}
     </>
