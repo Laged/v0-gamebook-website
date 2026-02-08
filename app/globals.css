@@ -47,6 +47,11 @@ body {
     --sidebar-accent-foreground: 240 5.9% 10%;
     --sidebar-border: 220 13% 91%;
     --sidebar-ring: 217.2 91.2% 59.8%;
+    --motion-fast: 200ms;
+    --motion-base: 300ms;
+    --motion-slow: 620ms;
+    --ease-out-smooth: cubic-bezier(0.16, 1, 0.3, 1);
+    --ease-flight: cubic-bezier(0.22, 1, 0.36, 1);
   }
   .dark {
     --background: 0 0% 3.9%;
@@ -90,5 +95,142 @@ body {
   }
   body {
     @apply bg-background text-foreground;
+  }
+}
+
+@layer components {
+  @keyframes ff-flicker {
+    0%, 100% { opacity: 0.78; }
+    25% { opacity: 0.82; }
+    50% { opacity: 0.75; }
+    75% { opacity: 0.85; }
+  }
+
+  @keyframes ff-ink-stamp {
+    0% { transform: scale(1.4) rotate(var(--rot, 0deg)); opacity: 0; filter: blur(2px); }
+    100% { transform: scale(1) rotate(var(--rot, 0deg)); opacity: 1; filter: blur(0); }
+  }
+
+  @keyframes ff-dice-out {
+    to { opacity: 0; transform: scale(1.02); }
+  }
+
+  @keyframes ff-tab-in {
+    from { opacity: 0; transform: translateY(8px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  @keyframes ff-creation-out {
+    to { opacity: 0; transform: translateY(-20px) scale(0.95); filter: blur(2px); }
+  }
+
+  @keyframes ff-game-in {
+    from { opacity: 0; transform: translateY(20px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  @keyframes ff-panel-in {
+    from { opacity: 0; transform: translateY(12px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  @keyframes ff-combat-hit-red {
+    0% { box-shadow: 0 0 20px rgba(248, 113, 113, 0.6), inset 0 0 10px rgba(248, 113, 113, 0.15); }
+    100% { box-shadow: none; }
+  }
+
+  @keyframes ff-combat-hit-blue {
+    0% { box-shadow: 0 0 20px rgba(96, 165, 250, 0.6), inset 0 0 10px rgba(96, 165, 250, 0.15); }
+    100% { box-shadow: none; }
+  }
+
+  .ink-stamp {
+    animation: ff-ink-stamp 250ms ease-out forwards;
+  }
+
+  .log-entry {
+    transform: rotate(var(--rot, 0deg));
+    animation: ff-ink-stamp 200ms ease-out;
+  }
+
+  .vignette {
+    background: radial-gradient(circle at 50% 50%, transparent 35%, rgba(0, 0, 0, 0.85) 100%);
+    animation: ff-flicker 4s ease-in-out infinite;
+  }
+
+  .animate-dice-out {
+    animation: ff-dice-out 250ms ease-in forwards;
+    pointer-events: none;
+  }
+
+  .animate-tab-in {
+    animation: ff-tab-in var(--motion-fast) var(--ease-out-smooth);
+  }
+
+  .animate-creation-out {
+    animation: ff-creation-out 400ms ease-in forwards;
+  }
+
+  .animate-game-in {
+    animation: ff-game-in var(--motion-slow) var(--ease-out-smooth) 100ms both;
+  }
+
+  .panel-in {
+    animation: ff-panel-in var(--motion-base) var(--ease-out-smooth) both;
+  }
+
+  .combat-hit-red {
+    animation: ff-combat-hit-red 600ms ease-out;
+  }
+
+  .combat-hit-blue {
+    animation: ff-combat-hit-blue 600ms ease-out;
+  }
+
+  .flying-number {
+    will-change: transform, opacity;
+    backface-visibility: hidden;
+    padding: 6px 10px;
+    border-radius: 2px;
+    border: 2px solid #44403c;
+    background: #eaddcf;
+    transform: translate(-50%, -50%) translate3d(0, 0, 0) scale(1);
+    transition:
+      transform var(--motion-slow) var(--ease-flight),
+      opacity 120ms var(--ease-out-smooth) 530ms;
+    font-size: 48px;
+    font-family: "MedievalSharp", cursive;
+    font-weight: bold;
+    color: var(--fly-start-color, var(--fly-end-color, #1c1917));
+    text-shadow: 0 1px 0 rgba(255, 255, 255, 0.55), 0 1px 3px rgba(0, 0, 0, 0.35);
+    opacity: 1;
+  }
+
+  .flying-number-arrived {
+    transform: translate(-50%, -50%) translate3d(var(--fly-dx, 0px), var(--fly-dy, 0px), 0) scale(var(--fly-scale, 0.42));
+    color: var(--fly-end-color, #1c1917);
+    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .vignette,
+  .ink-stamp,
+  .log-entry,
+  .animate-dice-out,
+  .animate-tab-in,
+  .animate-creation-out,
+  .animate-game-in,
+  .panel-in,
+  .combat-hit-red,
+  .combat-hit-blue {
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+  }
+
+  .flying-number {
+    transition-duration: 1ms !important;
+    transition-delay: 0ms !important;
   }
 }

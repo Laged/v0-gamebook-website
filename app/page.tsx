@@ -2,16 +2,21 @@
 import React, { Suspense, useState, useReducer, useCallback, useEffect, useRef } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import { FlyingNumber, type FlyingNum } from "@/components/flying-number"
+import { HeroCoreStatsBox, type HeroCoreValues } from "@/components/hero-core-stats-box"
 import { cn } from "@/lib/utils"
+import type { DieSpec } from "@/components/dungeon-dice"
+import { useTimeoutRegistry } from "@/hooks/use-timeout-registry"
 
 const DungeonDice = React.lazy(() => import("@/components/dungeon-dice"))
-type DieSpec = { value: number; tint?: string }
 interface DiceOpts {
   label?: string
   title?: string
   comparison?: { text: string; success: boolean; successLabel: string; failLabel: string }
+  onFlyStart?: () => void
   onDone?: () => void
   displayTotal?: number
+  hideContextCard?: boolean
   flyTarget?: string
   flyValue?: string | number
   flyColor?: string
@@ -100,7 +105,7 @@ function writeSaves(s: SaveSlot[]) { localStorage.setItem(LS_SAV, JSON.stringify
 function loadCur(): GS | null { try { const r = localStorage.getItem(LS_CUR); return r ? JSON.parse(r) : null } catch { return null } }
 
 /* ── Stat Pills ── */
-function StatPills({ items, size = "sm", animated = false }: { items: [string, string | number, string][]; size?: "sm" | "xs"; animated?: boolean }) {
+function StatPills({ items, size = "sm" }: { items: [string, string | number, string][]; size?: "sm" | "xs" }) {
   const sz = size === "sm" ? "text-[10px]" : "text-[9px]"
   const vz = size === "sm" ? "text-sm font-bold" : "text-xs font-bold"
   return (
@@ -108,7 +113,7 @@ function StatPills({ items, size = "sm", animated = false }: { items: [string, s
       {items.map(([l, v, c]) => (
         <div key={l} className="flex flex-col items-center">
           <span className={cn(sz, "uppercase tracking-widest font-[Cinzel] text-stone-400")}>{l}</span>
-          <span data-stat={animated ? `header-${l}` : undefined} key={animated ? `${l}-${v}` : undefined} className={cn(vz, "font-[MedievalSharp]", c, animated && "stat-pop")}>{v}</span>
+          <span className={cn(vz, "font-[MedievalSharp]", c)}>{v}</span>
         </div>
       ))}
     </div>
@@ -137,35 +142,111 @@ function RunSummary({ gs }: { gs: GS }) {
 }
 
 /* ── Creation ── */
-function Creation({ onCreate, log, showDice }: { onCreate: (sk: number, st: number, l: number) => void; log: (t: string, ty: Log["type"]) => void; showDice: ShowDiceFn }) {
+function Creation({
+  onCreate,
+  log,
+  showDice,
+  liftCore = false,
+}: {
+  onCreate: (sk: number, st: number, l: number) => void
+  log: (t: string, ty: Log["type"]) => void
+  showDice: ShowDiceFn
+  liftCore?: boolean
+}) {
   const [rolling, setRolling] = useState(false)
   const [phase, setPhase] = useState<"idle" | "skill" | "stamina" | "luck" | "done">("idle")
   const [partial, setPartial] = useState<{ sk?: number; skRaw?: number; st?: number; stRaw?: [number, number]; l?: number; lRaw?: number }>({})
+  const [incoming, setIncoming] = useState({ skill: false, stamina: false, luck: false })
+  const [docked, setDocked] = useState(false)
+  const [dockOffsetY, setDockOffsetY] = useState(0)
+  const panelRef = useRef<HTMLDivElement>(null)
+  const chainActiveRef = useRef(false)
+
+  function dockPanel() {
+    const panel = panelRef.current
+    if (!panel) return
+    // Keep the card visible as contextual HUD while dice roll.
+    const rect = panel.getBoundingClientRect()
+    const header = document.querySelector('[data-app-header="true"]') as HTMLElement | null
+    const targetTop = (header?.getBoundingClientRect().bottom ?? 70) + 10
+    setDockOffsetY(targetTop - rect.top)
+    setDocked(true)
+  }
+
+  function undockPanel() {
+    setDockOffsetY(0)
+    setDocked(false)
+  }
 
   function startRoll() {
+    if (chainActiveRef.current || phase !== "idle") return
+    chainActiveRef.current = true
+    dockPanel()
     setRolling(true)
     setPhase("skill")
     setPartial({})
+    setIncoming({ skill: false, stamina: false, luck: false })
     // Roll Skill: 1d6 + 6
     const sd = r1d6()
     const sk = sd + 6
-    showDice([{ value: sd }], { title: "Create Hero", label: `Skill: 1d6 + 6 = ${sk}`, displayTotal: sk, flyTarget: '[data-stat="creation-skill"]', flyValue: sk, flyColor: '#1e3a8a', onDone: () => {
-      setPartial(p => ({ ...p, sk, skRaw: sd }))
-      setPhase("stamina")
-      const std = r2d6()
-      const st = std[0] + std[1] + 12
-      showDice([{ value: std[0] }, { value: std[1] }], { title: "Create Hero", label: `Stamina: 2d6 + 12 = ${st}`, displayTotal: st, flyTarget: '[data-stat="creation-stamina"]', flyValue: st, flyColor: '#7f1d1d', onDone: () => {
-        setPartial(p => ({ ...p, st, stRaw: std }))
-        setPhase("luck")
-        const ld = r1d6()
-        const l = ld + 6
-        showDice([{ value: ld }], { title: "Create Hero", label: `Luck: 1d6 + 6 = ${l}`, displayTotal: l, flyTarget: '[data-stat="creation-luck"]', flyValue: l, flyColor: '#064e3b', onDone: () => {
-          setPartial(p => ({ ...p, l, lRaw: ld }))
-          setPhase("done")
-          setRolling(false)
-        }})
-      }})
-    }})
+    showDice([{ value: sd }], {
+      title: "Create Hero",
+      label: `Skill: 1d6 + 6 = ${sk}`,
+      displayTotal: sk,
+      hideContextCard: true,
+      flyTarget: '[data-stat="creation-skill"]',
+      flyValue: sk,
+      flyColor: "#1e3a8a",
+      onFlyStart: () => {
+        setIncoming((i) => ({ ...i, skill: true }))
+      },
+      onDone: () => {
+        setIncoming((i) => ({ ...i, skill: false }))
+        setPartial((p) => ({ ...p, sk, skRaw: sd }))
+        setPhase("stamina")
+        const std = r2d6()
+        const st = std[0] + std[1] + 12
+        showDice([{ value: std[0] }, { value: std[1] }], {
+          title: "Create Hero",
+          label: `Stamina: 2d6 + 12 = ${st}`,
+          displayTotal: st,
+          hideContextCard: true,
+          flyTarget: '[data-stat="creation-stamina"]',
+          flyValue: st,
+          flyColor: "#7f1d1d",
+          onFlyStart: () => {
+            setIncoming((i) => ({ ...i, stamina: true }))
+          },
+          onDone: () => {
+            setIncoming((i) => ({ ...i, stamina: false }))
+            setPartial((p) => ({ ...p, st, stRaw: std }))
+            setPhase("luck")
+            const ld = r1d6()
+            const l = ld + 6
+            showDice([{ value: ld }], {
+              title: "Create Hero",
+              label: `Luck: 1d6 + 6 = ${l}`,
+              displayTotal: l,
+              hideContextCard: true,
+              flyTarget: '[data-stat="creation-luck"]',
+              flyValue: l,
+              flyColor: "#064e3b",
+              onFlyStart: () => {
+                setIncoming((i) => ({ ...i, luck: true }))
+              },
+              onDone: () => {
+                setIncoming((i) => ({ ...i, luck: false }))
+                setPartial((p) => ({ ...p, l, lRaw: ld }))
+                setPhase("done")
+                setRolling(false)
+                undockPanel()
+                chainActiveRef.current = false
+              },
+            })
+          },
+        })
+      },
+    })
   }
 
   const stats = phase === "done" && partial.sk != null && partial.st != null && partial.l != null
@@ -177,36 +258,53 @@ function Creation({ onCreate, log, showDice }: { onCreate: (sk: number, st: numb
     log(`Hero created: Skill ${stats.sk} Stamina ${stats.st} Luck ${stats.l}`, "success")
   }
 
-  // Show partial results as they come in
-  const statCards: [string, number | undefined, string][] = [
-    ["Skill", partial.sk, "text-blue-900"],
-    ["Stamina", partial.st, "text-red-900"],
-    ["Luck", partial.l, "text-emerald-900"],
-  ]
+  const coreValues: HeroCoreValues = {
+    skill: partial.sk ?? "?",
+    stamina: partial.st ?? "?",
+    luck: partial.l ?? "?",
+  }
 
   return (
-    <div className={cn(PNL, "border-4 border-double max-w-md mx-auto")}>
-      <h2 className={cn("text-2xl font-bold mb-2 font-[Cinzel] text-center uppercase tracking-wider", INK)}>Create Your Hero</h2>
-      <p className={cn("text-sm mb-6 text-center font-[Crimson_Text] italic", FADED)}>Roll the bones to determine thy fate...</p>
+    <div
+      ref={panelRef}
+      className={cn(
+        PNL,
+        "border-4 border-double max-w-md mx-auto relative transition-[transform,padding,box-shadow,border-color] duration-[620ms] ease-[cubic-bezier(0.22,1,0.36,1)]",
+        docked && "z-[140] pointer-events-none shadow-2xl border-amber-800/70",
+      )}
+      style={{
+        transform: docked ? `translateY(${dockOffsetY}px) scale(0.82)` : "translateY(0px) scale(1)",
+        transformOrigin: "top center",
+      }}
+    >
+      <h2 className={cn(
+        "font-bold font-[Cinzel] text-center uppercase tracking-wider transition-[font-size,margin] duration-300",
+        docked ? "text-lg mb-1" : "text-2xl mb-2",
+        INK,
+      )}>
+        Create Your Hero
+      </h2>
+      <p className={cn(
+        "text-center font-[Crimson_Text] italic transition-[font-size,margin] duration-300",
+        docked ? "text-xs mb-3" : "text-sm mb-6",
+        FADED,
+      )}>
+        Roll the bones to determine thy fate...
+      </p>
       {phase === "idle" ? (
         <Button className={cn(BTN, "w-full text-lg py-6")} onClick={startRoll} disabled={rolling}>Roll Character</Button>
       ) : (
         <div className="flex flex-col gap-4">
-          {/* Partial / full stat display */}
-          <div className="grid grid-cols-3 gap-3 text-center">
-            {statCards.map(([label, v, c]) => (
-              <div key={label} className={cn("rounded-sm border-2 p-3 transition-all duration-300", v != null ? "border-stone-900 bg-white/40" : "border-stone-600/30 bg-white/10")}>
-                <p className={cn("text-xs font-[Cinzel] uppercase tracking-wider mb-1", FADED)}>{label}</p>
-                {v != null ? (
-                  <p data-stat={`creation-${label.toLowerCase()}`} className={cn("text-3xl font-bold font-[MedievalSharp] ink-stamp", c)}>{v}</p>
-                ) : (
-                  <p data-stat={`creation-${label.toLowerCase()}`} className={cn("text-3xl font-bold font-[MedievalSharp] text-stone-300 animate-pulse")}>?</p>
-                )}
-              </div>
-            ))}
-          </div>
+          {/* Shared core stats box for creation->header transition */}
+          <HeroCoreStatsBox
+            values={coreValues}
+            incoming={incoming}
+            dataPrefix="creation"
+            sharedAttr="creation-core-box"
+            className={cn(liftCore && "invisible")}
+          />
           {rolling && (
-            <p className={cn("text-sm text-center font-[Crimson_Text] italic animate-pulse", FADED)}>
+            <p className={cn("text-sm text-center font-[Crimson_Text] italic", FADED)}>
               {phase === "skill" && "Rolling for Skill..."}
               {phase === "stamina" && "Rolling for Stamina..."}
               {phase === "luck" && "Rolling for Luck..."}
@@ -215,7 +313,14 @@ function Creation({ onCreate, log, showDice }: { onCreate: (sk: number, st: numb
           {stats && (
             <div className="flex gap-3">
               <Button className={cn(BTN, "flex-1")} onClick={confirm}>Accept Destiny</Button>
-              <Button variant="outline" className="flex-1 bg-transparent border-stone-600 text-stone-700 font-[MedievalSharp] hover:bg-stone-200" onClick={() => { setPhase("idle"); setPartial({}) }}>Reroll</Button>
+              <Button variant="outline" className="flex-1 bg-transparent border-stone-600 text-stone-700 font-[MedievalSharp] hover:bg-stone-200" onClick={() => {
+                chainActiveRef.current = false
+                setRolling(false)
+                undockPanel()
+                setPhase("idle")
+                setPartial({})
+                setIncoming({ skill: false, stamina: false, luck: false })
+              }}>Reroll</Button>
             </div>
           )}
         </div>
@@ -322,6 +427,8 @@ function Combat({ s, d, showDice }: { s: GS; d: React.Dispatch<GA>; showDice: Sh
   const [rlog, setRlog] = useState<string[]>([])
   const [over, setOver] = useState(false)
   const [round, setRound] = useState(0)
+  const [heroRoll, setHeroRoll] = useState<number | null>(null)
+  const [incomingHeroRoll, setIncomingHeroRoll] = useState(false)
   const log = useCallback((t: string, ty: Log["type"] = "info") => d({ type: "LOG", text: t, lt: ty }), [d])
 
   function addToQueue() {
@@ -332,6 +439,8 @@ function Combat({ s, d, showDice }: { s: GS; d: React.Dispatch<GA>; showDice: Sh
   function startNext(fromQueue?: Enemy) {
     const e = fromQueue || (() => { const sk = Number.parseInt(esk) || 8, st = Number.parseInt(est) || 6; return { name: en || "Enemy", skill: sk, stamina: st, maxStamina: st } as Enemy })()
     setEnemy(e); setRlog([]); setOver(false); setRound(0)
+    setHeroRoll(null)
+    setIncomingHeroRoll(false)
     log(`Combat: ${e.name} (Sk${e.skill} St${e.stamina})`, "warning")
   }
 
@@ -365,10 +474,15 @@ function Combat({ s, d, showDice }: { s: GS; d: React.Dispatch<GA>; showDice: Sh
         failLabel: enemyWon ? "WOUNDED!" : "CLASH!",
       },
       displayTotal: ht,
-      flyTarget: '[data-combat="hero"]',
+      flyTarget: '[data-combat="hero-roll"]',
       flyValue: ht,
       flyColor: '#1e3a8a',
+      onFlyStart: () => {
+        setIncomingHeroRoll(true)
+      },
       onDone: () => {
+        setIncomingHeroRoll(false)
+        setHeroRoll(ht)
         d({ type: "DANGER" })
         setRound(rd)
         const lines: string[] = []
@@ -495,7 +609,21 @@ function Combat({ s, d, showDice }: { s: GS; d: React.Dispatch<GA>; showDice: Sh
             <p className={cn("mt-1 text-xs font-[Crimson_Text]", FADED)}>Stamina: {enemy.stamina}/{enemy.maxStamina}</p>
           </div>
           <div key={`hero-${s.stamina}`} className="rounded-sm border-2 border-blue-800 bg-blue-50/60 p-4 combat-hit-blue">
-            <div className="flex items-center justify-between mb-2"><h3 data-combat="hero" className="font-bold text-blue-900 font-[Cinzel]">You</h3><span className={cn("text-xs font-[Crimson_Text]", FADED)}>Skill {s.skill}{s.atkMod !== 0 ? ` (${s.atkMod >= 0 ? "+" : ""}${s.atkMod})` : ""} | Luck {s.luck}</span></div>
+            <div className="flex items-center justify-between mb-2 gap-2">
+              <h3 className="font-bold text-blue-900 font-[Cinzel]">You</h3>
+              <div className="flex items-center gap-2">
+                <span className={cn("text-xs font-[Crimson_Text]", FADED)}>Skill {s.skill}{s.atkMod !== 0 ? ` (${s.atkMod >= 0 ? "+" : ""}${s.atkMod})` : ""} | Luck {s.luck}</span>
+                <span
+                  data-combat="hero-roll"
+                  className={cn(
+                    "inline-flex min-w-9 items-center justify-center rounded-sm border border-blue-700 bg-blue-100 px-2 py-0.5 text-sm font-bold font-[MedievalSharp] text-blue-900 transition-colors duration-200",
+                    incomingHeroRoll && "text-transparent",
+                  )}
+                >
+                  {heroRoll ?? "?"}
+                </span>
+              </div>
+            </div>
             <div className="h-3 w-full overflow-hidden rounded-full bg-stone-300"><div className="h-full rounded-full bg-blue-700 transition-all duration-500 ease-out" style={{ width: `${(s.stamina / s.mStamina) * 100}%` }} /></div>
             <p className={cn("mt-1 text-xs font-[Crimson_Text]", FADED)}>Stamina: {s.stamina}/{s.mStamina}</p>
           </div>
@@ -637,39 +765,6 @@ function ActivityLog({ log }: { log: Log[] }) {
   )
 }
 
-/* ── Flying Number ── */
-interface FlyingNum { id: number; value: string | number; fromX: number; fromY: number; toX: number; toY: number; color: string }
-
-function FlyingNumber({ num, onDone }: { num: FlyingNum; onDone: () => void }) {
-  const [arrived, setArrived] = useState(false)
-  const doneRef = useRef(onDone)
-  doneRef.current = onDone
-  useEffect(() => {
-    requestAnimationFrame(() => requestAnimationFrame(() => setArrived(true)))
-    const t = setTimeout(() => doneRef.current(), 650)
-    return () => clearTimeout(t)
-  }, [])
-  return (
-    <div className="flying-number" style={{
-      position: 'fixed', zIndex: 9999, pointerEvents: 'none',
-      left: arrived ? num.toX : num.fromX,
-      top: arrived ? num.toY : num.fromY,
-      transform: 'translate(-50%, -50%)',
-      transition: arrived
-        ? 'left 500ms cubic-bezier(0.34,1.56,0.64,1), top 500ms cubic-bezier(0.34,1.56,0.64,1), font-size 500ms cubic-bezier(0.34,1.56,0.64,1), color 500ms ease-out, text-shadow 500ms ease-out, opacity 150ms ease-out 400ms'
-        : 'none',
-      fontSize: arrived ? 18 : 48,
-      fontFamily: 'MedievalSharp, cursive',
-      fontWeight: 'bold',
-      color: arrived ? num.color : '#ffd666',
-      textShadow: arrived
-        ? '0 1px 3px rgba(0,0,0,.4)'
-        : '0 0 30px rgba(255,180,40,.6), 0 2px 8px rgba(0,0,0,.9)',
-      opacity: arrived ? 0 : 1,
-    }}>{num.value}</div>
-  )
-}
-
 /* ── Saves ── */
 function Saves({ s, d, onLoad }: { s: GS; d: React.Dispatch<GA>; onLoad: (state: GS) => void }) {
   const [saves, setSaves] = useState<SaveSlot[]>([])
@@ -727,21 +822,22 @@ function Saves({ s, d, onLoad }: { s: GS; d: React.Dispatch<GA>; onLoad: (state:
   )
 }
 
-/* ── Tab Icons ── */
-function TabIcon({ icon, active }: { icon: string; active: boolean }) {
-  const c = active ? "#eaddcf" : "#78716c"
-  const paths: Record<string, string> = {
-    explore: "M12 2L2 12h3v8h6v-6h2v6h6v-8h3L12 2z",
-    encounter: "M14.1 4.1L12 2 9.9 4.1 4.1 9.9 2 12l2.1 2.1 5.8 5.8L12 22l2.1-2.1 5.8-5.8L22 12l-2.1-2.1-5.8-5.8zM12 15l-3-3 3-3 3 3-3 3z",
-    equipment: "M20 7h-4V4c0-1.1-.9-2-2-2h-4c-1.1 0-2 .9-2 2v3H4c-1.1 0-2 .9-2 2v11c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V9c0-1.1-.9-2-2-2zM10 4h4v3h-4V4z",
-  }
-  return <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill={c} className="w-6 h-6"><path d={paths[icon]} /></svg>
-}
-
 /* ══════════════════════════════════════════════════ */
 /*                     MAIN PAGE                     */
 /* ══════════════════════════════════════════════════ */
 type Tab = "explore" | "encounter" | "equipment"
+const DICE_MODAL_EXIT_MS = 250
+const CORE_MORPH_MS = 620
+
+interface SharedCoreMorph {
+  skill: number
+  stamina: number
+  luck: number
+  from: { left: number; top: number; width: number; height: number }
+  to: { left: number; top: number; width: number; height: number }
+  arrived: boolean
+  fading: boolean
+}
 
 export default function Page() {
   const [s, d] = useReducer(reducer, init, (initial) => {
@@ -750,23 +846,58 @@ export default function Page() {
     return saved && typeof saved.created === "boolean" ? saved : initial
   })
   const [tab, setTab] = useState<Tab>("explore")
-  const [tabKey, setTabKey] = useState(0)
   const addLog = useCallback((t: string, ty: Log["type"]) => d({ type: "LOG", text: t, lt: ty }), [])
   const [diceModal, setDiceModal] = useState<{ results: DieSpec[] } & DiceOpts | null>(null)
   const [diceKey, setDiceKey] = useState(0)
   const [diceExiting, setDiceExiting] = useState(false)
   const [showCreation, setShowCreation] = useState(!s.created)
   const [creationFading, setCreationFading] = useState(false)
+  const [showHeaderCore, setShowHeaderCore] = useState(s.created)
+  const [liftCreationCore, setLiftCreationCore] = useState(false)
+  const [sharedCoreMorph, setSharedCoreMorph] = useState<SharedCoreMorph | null>(null)
   const [flyingNums, setFlyingNums] = useState<FlyingNum[]>([])
   const flyIdRef = useRef(0)
+  const flyResolversRef = useRef(new Map<number, (didArrive: boolean) => void>())
   const diceWrapperRef = useRef<HTMLDivElement>(null)
+  const scheduleTimeout = useTimeoutRegistry()
 
-  const spawnFly = useCallback((value: string | number, fromX: number, fromY: number, toSelector: string, color: string) => {
-    const el = document.querySelector(toSelector)
-    if (!el) return
-    const r = el.getBoundingClientRect()
-    const id = ++flyIdRef.current
-    setFlyingNums(prev => [...prev, { id, value, fromX, fromY, toX: r.left + r.width / 2, toY: r.top + r.height / 2, color }])
+  const spawnFly = useCallback((
+    value: string | number,
+    fromX: number,
+    fromY: number,
+    toSelector: string,
+    color: string,
+    opts?: { retries?: number; onStart?: () => void },
+  ) => {
+    const retries = opts?.retries ?? 12
+    return new Promise<boolean>((resolve) => {
+      const attemptSpawn = (remaining: number) => {
+        const el = document.querySelector(toSelector)
+        if (!el) {
+          if (remaining > 0) {
+            scheduleTimeout(() => attemptSpawn(remaining - 1), 32)
+          } else {
+            resolve(false)
+          }
+          return
+        }
+
+        const r = el.getBoundingClientRect()
+        const id = ++flyIdRef.current
+        setFlyingNums(prev => [...prev, { id, value, fromX, fromY, toX: r.left + r.width / 2, toY: r.top + r.height / 2, color }])
+        opts?.onStart?.()
+        flyResolversRef.current.set(id, resolve)
+      }
+
+      attemptSpawn(retries)
+    })
+  }, [scheduleTimeout])
+
+  useEffect(() => {
+    return () => {
+      for (const resolve of flyResolversRef.current.values()) resolve(false)
+      flyResolversRef.current.clear()
+    }
   }, [])
 
   const showDice: ShowDiceFn = useCallback((results, opts) => {
@@ -787,96 +918,115 @@ export default function Page() {
     } catch {}
   }, [s])
 
-  const tabs: { key: Tab; label: string; icon: string }[] = [
-    { key: "explore", label: "Explore", icon: "explore" },
-    { key: "encounter", label: "Encounter", icon: "encounter" },
-    { key: "equipment", label: "Equipment", icon: "equipment" },
+  const tabs: { key: Tab; label: string }[] = [
+    { key: "explore", label: "Explore" },
+    { key: "encounter", label: "Encounter" },
+    { key: "equipment", label: "Equipment" },
   ]
 
   return (
     <>
-      {/* Google Fonts */}
-      <link rel="preconnect" href="https://fonts.googleapis.com" />
-      <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
-      <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;700;900&family=Crimson+Text:ital,wght@0,400;0,600;1,400&family=MedievalSharp&display=swap" rel="stylesheet" />
-
-      <style>{`
-        @keyframes flicker { 0%,100%{opacity:.78} 25%{opacity:.82} 50%{opacity:.75} 75%{opacity:.85} }
-        @keyframes inkStamp { 0%{transform:scale(1.4) rotate(var(--rot,0deg));opacity:0;filter:blur(2px)} 100%{transform:scale(1) rotate(var(--rot,0deg));opacity:1;filter:blur(0)} }
-        .ink-stamp{animation:inkStamp .25s ease-out forwards}
-        .log-entry{transform:rotate(var(--rot,0deg));animation:inkStamp .2s ease-out}
-        .vignette{background:radial-gradient(circle at 50% 50%,transparent 35%,rgba(0,0,0,.85) 100%);animation:flicker 4s ease-in-out infinite}
-        @keyframes diceOut{to{opacity:0;transform:scale(1.02)}}
-        .animate-dice-out{animation:diceOut .25s ease-in forwards;pointer-events:none}
-        @keyframes tabIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
-        .animate-tab-in{animation:tabIn .2s ease-out}
-        @keyframes creationOut{to{opacity:0;transform:translateY(-20px) scale(0.95);filter:blur(2px)}}
-        .animate-creation-out{animation:creationOut .4s ease-in forwards}
-        @keyframes gameIn{from{opacity:0;transform:translateY(20px)}to{opacity:1;transform:translateY(0)}}
-        .animate-game-in{animation:gameIn .5s ease-out .1s both}
-        @keyframes fadeIn{from{opacity:0}to{opacity:1}}
-        .animate-fade-in{animation:fadeIn .4s ease-out}
-        @keyframes statPop{0%{transform:scale(1.3);color:#fbbf24}100%{transform:scale(1)}}
-        .stat-pop{animation:statPop .3s ease-out}
-        @keyframes panelIn{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}
-        .panel-in{animation:panelIn .3s ease-out both}
-        @keyframes combatHitRed{0%{box-shadow:0 0 20px rgba(248,113,113,.6),inset 0 0 10px rgba(248,113,113,.15)}100%{box-shadow:none}}
-        .combat-hit-red{animation:combatHitRed .6s ease-out}
-        @keyframes combatHitBlue{0%{box-shadow:0 0 20px rgba(96,165,250,.6),inset 0 0 10px rgba(96,165,250,.15)}100%{box-shadow:none}}
-        .combat-hit-blue{animation:combatHitBlue .6s ease-out}
-        .flying-number{will-change:transform,left,top,opacity}
-      `}</style>
-
       <div className="min-h-screen bg-stone-950 text-stone-900 relative flex flex-col">
         <div className="fixed inset-0 pointer-events-none z-[200] vignette" />
 
         {/* Header */}
-        <header className={cn("border-b-4 border-double border-stone-700 bg-stone-900 px-4 py-4 relative z-10 shrink-0 transition-[filter] duration-300", diceModal && "blur-[2px] brightness-90")}>
-          <div className="mx-auto flex max-w-2xl items-center justify-between">
-            <div>
-              <h1 className="text-xl font-bold tracking-wider text-[#eaddcf] font-[Cinzel] uppercase">Fighting Fantasy</h1>
-              <p className="text-[10px] text-stone-500 tracking-widest font-[Cinzel] uppercase">Gamebook Companion</p>
+        <header data-app-header="true" className="sticky top-0 border-b-4 border-double border-stone-700 bg-stone-900 px-4 py-4 z-[220] shrink-0">
+          <div className="mx-auto flex max-w-2xl flex-col gap-3">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <h1 className="text-xl font-bold tracking-wider text-[#eaddcf] font-[Cinzel] uppercase">Fighting Fantasy</h1>
+                <p className="text-[10px] text-stone-500 tracking-widest font-[Cinzel] uppercase">Gamebook Companion</p>
+              </div>
+              <div className="flex items-center gap-3">
+                <div data-shared="header-core-slot" className="min-h-[62px] min-w-[184px] flex items-center justify-end">
+                  {s.created && showHeaderCore && !sharedCoreMorph && (
+                    <HeroCoreStatsBox
+                      compact
+                      dataPrefix="header"
+                      values={{ skill: s.skill, stamina: s.stamina, luck: s.luck }}
+                    />
+                  )}
+                </div>
+              </div>
             </div>
-            {s.created && (
-              <StatPills animated items={[
-                ["SKL", s.skill, "text-stone-300"], ["STA", s.stamina, "text-red-300"],
-                ["LCK", s.luck, "text-emerald-300"], ["PRV", s.provisions, "text-amber-300"],
-                ["GLD", s.gold, "text-yellow-200"],
-              ]} />
+            {s.created && !showCreation && (
+              <div className="flex flex-wrap items-center justify-center gap-2">
+                {tabs.map((t) => (
+                  <button
+                    key={t.key}
+                    type="button"
+                    onClick={() => { if (tab !== t.key) setTab(t.key) }}
+                    className={cn(
+                      "rounded-sm border px-4 py-1.5 text-xs font-[Cinzel] uppercase tracking-[0.2em] transition-colors",
+                      tab === t.key
+                        ? "border-amber-500 bg-stone-800 text-amber-200"
+                        : "border-stone-600 bg-stone-900 text-stone-400 hover:text-stone-200 hover:border-stone-400",
+                    )}
+                  >
+                    {t.label}
+                  </button>
+                ))}
+                <div className="ml-2">
+                  <StatPills size="xs" items={[
+                    ["PRV", s.provisions, "text-amber-300"],
+                    ["GLD", s.gold, "text-yellow-200"],
+                  ]} />
+                </div>
+              </div>
             )}
           </div>
         </header>
 
         {/* Main Content */}
-        <main className={cn("flex-1 overflow-y-auto relative z-10 pb-20 transition-[filter] duration-300", diceModal && "blur-[2px] brightness-90")}>
+        <main className={cn("flex-1 overflow-y-auto relative pb-8 transition-[filter] duration-300", !showCreation && "z-10", diceModal && !showCreation && "blur-[2px] brightness-90")}>
           <div className="mx-auto max-w-2xl px-4 py-6">
             {showCreation ? (
               <div className={cn("py-8", creationFading && "animate-creation-out")}><Creation onCreate={(sk, st, l) => {
-                const cardPositions = (['skill', 'stamina', 'luck'] as const).map(stat => {
-                  const el = document.querySelector(`[data-stat="creation-${stat}"]`)
-                  return el?.getBoundingClientRect()
-                })
+                const fromEl = document.querySelector('[data-shared="creation-core-box"]') as HTMLElement | null
+                const toEl = document.querySelector('[data-shared="header-core-slot"]') as HTMLElement | null
+
+                if (!fromEl || !toEl) {
+                  setCreationFading(true)
+                  scheduleTimeout(() => {
+                    d({ type: "CREATE", skill: sk, stamina: st, luck: l })
+                    setShowCreation(false)
+                    setCreationFading(false)
+                    setShowHeaderCore(true)
+                  }, 280)
+                  return
+                }
+
+                const from = fromEl.getBoundingClientRect()
+                const to = toEl.getBoundingClientRect()
+                setLiftCreationCore(true)
+                setShowHeaderCore(false)
                 setCreationFading(true)
-                setTimeout(() => {
+                setSharedCoreMorph({
+                  skill: sk,
+                  stamina: st,
+                  luck: l,
+                  from: { left: from.left, top: from.top, width: from.width, height: from.height },
+                  to: { left: to.left, top: to.top, width: to.width, height: to.height },
+                  arrived: false,
+                  fading: false,
+                })
+                requestAnimationFrame(() => requestAnimationFrame(() => {
+                  setSharedCoreMorph((prev) => prev ? { ...prev, arrived: true } : prev)
+                }))
+                scheduleTimeout(() => {
                   d({ type: "CREATE", skill: sk, stamina: st, luck: l })
                   setShowCreation(false)
                   setCreationFading(false)
+                  setLiftCreationCore(false)
+                  setShowHeaderCore(true)
                   requestAnimationFrame(() => requestAnimationFrame(() => {
-                    const targets: { value: number; target: string; color: string }[] = [
-                      { value: sk, target: '[data-stat="header-SKL"]', color: '#cbd5e1' },
-                      { value: st, target: '[data-stat="header-STA"]', color: '#fca5a5' },
-                      { value: l, target: '[data-stat="header-LCK"]', color: '#6ee7b7' },
-                    ]
-                    targets.forEach(({ value, target, color }, i) => {
-                      const from = cardPositions[i]
-                      if (!from) return
-                      setTimeout(() => spawnFly(value, from.left + from.width / 2, from.top + from.height / 2, target, color), i * 100)
-                    })
+                    setSharedCoreMorph((prev) => prev ? { ...prev, fading: true } : prev)
+                    scheduleTimeout(() => setSharedCoreMorph(null), 120)
                   }))
-                }, 400)
-              }} log={addLog} showDice={showDice} /></div>
+                }, CORE_MORPH_MS)
+              }} log={addLog} showDice={showDice} liftCore={liftCreationCore} /></div>
             ) : s.created ? (
-              <div key={tabKey} className="flex flex-col gap-6 animate-tab-in animate-game-in">
+              <div key={tab} className="flex flex-col gap-6 animate-tab-in animate-game-in">
                 {tab === "explore" && (<><div className="panel-in" style={{ animationDelay: "0ms" }}><MapView s={s} d={d} /></div><div className="panel-in" style={{ animationDelay: "80ms" }}><ActivityLog log={s.log} /></div></>)}
                 {tab === "encounter" && (<><div className="panel-in" style={{ animationDelay: "0ms" }}><Combat s={s} d={d} showDice={showDice} /></div><div className="panel-in" style={{ animationDelay: "80ms" }}><Tests s={s} d={d} showDice={showDice} /></div><div className="panel-in" style={{ animationDelay: "160ms" }}><Roller log={addLog} showDice={showDice} /></div><div className="panel-in" style={{ animationDelay: "240ms" }}><ActivityLog log={s.log} /></div></>)}
                 {tab === "equipment" && (<><div className="panel-in" style={{ animationDelay: "0ms" }}><Sheet s={s} d={d} /></div><div className="panel-in" style={{ animationDelay: "80ms" }}><Saves s={s} d={d} onLoad={(state) => d({ type: "LOAD_STATE", state })} /></div></>)}
@@ -884,22 +1034,6 @@ export default function Page() {
             ) : null}
           </div>
         </main>
-
-        {/* Bottom Tab Bar */}
-        {s.created && !showCreation && (
-          <nav className="fixed bottom-0 left-0 right-0 z-40 border-t-4 border-double border-stone-700 bg-stone-900 animate-fade-in" aria-label="Game sections">
-            <div className="mx-auto max-w-2xl flex">
-              {tabs.map(t => (
-                <button key={t.key} type="button" onClick={() => { setTab(t.key); setTabKey(k => k + 1) }}
-                  className={cn("flex-1 flex flex-col items-center gap-1 py-3 transition-colors", tab === t.key ? "bg-stone-800 text-[#eaddcf]" : "text-stone-500 hover:text-stone-300 hover:bg-stone-800/50")}>
-                  <TabIcon icon={t.icon} active={tab === t.key} />
-                  <span className={cn("text-[11px] font-[MedievalSharp] tracking-wide", tab === t.key ? "text-amber-400" : "text-stone-500")}>{t.label}</span>
-                </button>
-              ))}
-            </div>
-            <div className="h-[env(safe-area-inset-bottom)] bg-stone-900" />
-          </nav>
-        )}
 
         {/* Footer (pre-creation only) */}
         {showCreation && (
@@ -909,35 +1043,86 @@ export default function Page() {
         )}
       </div>
 
+      {sharedCoreMorph && (
+        <div
+          style={{
+            position: "fixed",
+            left: sharedCoreMorph.from.left,
+            top: sharedCoreMorph.from.top,
+            width: sharedCoreMorph.from.width,
+            pointerEvents: "none",
+            zIndex: 260,
+            transformOrigin: "top left",
+            willChange: "transform, opacity",
+            backfaceVisibility: "hidden",
+            transform: sharedCoreMorph.arrived
+              ? `translate(${sharedCoreMorph.to.left - sharedCoreMorph.from.left}px, ${sharedCoreMorph.to.top - sharedCoreMorph.from.top}px) scale(${sharedCoreMorph.to.width / Math.max(sharedCoreMorph.from.width, 1)}, ${sharedCoreMorph.to.height / Math.max(sharedCoreMorph.from.height, 1)})`
+              : "translate(0px, 0px) scale(1, 1)",
+            opacity: sharedCoreMorph.fading ? 0 : 1,
+            transition: `transform ${CORE_MORPH_MS}ms cubic-bezier(0.22, 1, 0.36, 1), opacity 120ms ease-out`,
+          }}
+        >
+          <HeroCoreStatsBox
+            values={{ skill: sharedCoreMorph.skill, stamina: sharedCoreMorph.stamina, luck: sharedCoreMorph.luck }}
+            dataPrefix="creation"
+          />
+        </div>
+      )}
+
       {/* 3D Dice Modal */}
       {diceModal && (
         <Suspense fallback={<div className="fixed inset-0 z-[100] bg-black/80 flex items-center justify-center"><span className="text-amber-400 font-[Cinzel] text-lg animate-pulse">Loading dice...</span></div>}>
           <div ref={diceWrapperRef} className={diceExiting ? "animate-dice-out" : ""}>
-            <DungeonDice key={diceKey} targetResults={diceModal.results} label={diceModal.label} title={diceModal.title} comparison={diceModal.comparison} displayTotal={diceModal.displayTotal} onComplete={() => {
+            <DungeonDice key={diceKey} targetResults={diceModal.results} label={diceModal.label} title={diceModal.title} comparison={diceModal.comparison} displayTotal={diceModal.displayTotal} hideContextCard={diceModal.hideContextCard} onComplete={() => {
               const cb = diceModal.onDone
+              const onFlyStart = diceModal.onFlyStart
+              const hasFlyTransition = Boolean(diceModal.flyTarget && diceModal.flyValue != null)
+              const completeStartAt = performance.now()
+              let flyComplete = Promise.resolve(false)
               if (diceModal.flyTarget && diceModal.flyValue != null) {
                 let fromX = window.innerWidth / 2, fromY = window.innerHeight * 0.55
                 const wrapper = diceWrapperRef.current
                 if (wrapper) {
-                  const divs = wrapper.querySelectorAll('div')
-                  for (const el of divs) {
-                    const fs = parseFloat(getComputedStyle(el).fontSize)
-                    if (fs > 40) {
-                      const rect = el.getBoundingClientRect()
-                      fromX = rect.left + rect.width / 2
-                      fromY = rect.top + rect.height / 2
-                      break
-                    }
+                  const totalEl = wrapper.querySelector('[data-dice-total="true"]')
+                  if (totalEl instanceof HTMLElement) {
+                    const rect = totalEl.getBoundingClientRect()
+                    fromX = rect.left + rect.width / 2
+                    fromY = rect.top + rect.height / 2
                   }
                 }
-                spawnFly(diceModal.flyValue, fromX, fromY, diceModal.flyTarget, diceModal.flyColor || '#ffd666')
+                flyComplete = spawnFly(
+                  diceModal.flyValue,
+                  fromX,
+                  fromY,
+                  diceModal.flyTarget,
+                  diceModal.flyColor || "#ffd666",
+                  {
+                    onStart: () => {
+                      if (onFlyStart) queueMicrotask(onFlyStart)
+                    },
+                  },
+                )
+              } else if (onFlyStart) {
+                queueMicrotask(onFlyStart)
               }
+
               setDiceExiting(true)
-              setTimeout(() => {
+              scheduleTimeout(() => {
                 setDiceExiting(false)
                 setDiceModal(null)
-                if (cb) queueMicrotask(cb)
-              }, 250)
+              }, DICE_MODAL_EXIT_MS)
+
+              if (cb) {
+                if (hasFlyTransition) {
+                  void flyComplete.then(() => {
+                    const elapsed = performance.now() - completeStartAt
+                    const callbackDelay = Math.max(0, DICE_MODAL_EXIT_MS - elapsed)
+                    scheduleTimeout(() => queueMicrotask(cb), callbackDelay)
+                  })
+                } else {
+                  scheduleTimeout(() => queueMicrotask(cb), DICE_MODAL_EXIT_MS)
+                }
+              }
             }} />
           </div>
         </Suspense>
@@ -945,7 +1130,13 @@ export default function Page() {
 
       {/* Flying Numbers */}
       {flyingNums.map(f => (
-        <FlyingNumber key={f.id} num={f} onDone={() => setFlyingNums(p => p.filter(n => n.id !== f.id))} />
+        <FlyingNumber key={f.id} num={f} onDone={() => {
+          setFlyingNums(p => p.filter(n => n.id !== f.id))
+          const resolve = flyResolversRef.current.get(f.id)
+          if (!resolve) return
+          flyResolversRef.current.delete(f.id)
+          resolve(true)
+        }} />
       ))}
     </>
   )

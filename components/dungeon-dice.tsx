@@ -21,6 +21,7 @@ interface Props {
   title?: string
   comparison?: Comparison
   displayTotal?: number
+  hideContextCard?: boolean
   onComplete: () => void
 }
 
@@ -299,18 +300,88 @@ function updFlame(f: ReturnType<typeof mkFlame>, dt: number) {
   f.g.attributes.position.needsUpdate = true; f.g.attributes.aLife.needsUpdate = true
 }
 
+function disposeMaterial(mat: THREE.Material) {
+  const texKeys = [
+    "map", "alphaMap", "aoMap", "bumpMap", "displacementMap", "emissiveMap",
+    "envMap", "lightMap", "metalnessMap", "normalMap", "roughnessMap", "specularMap",
+  ] as const
+  const maybeMat = mat as THREE.Material & Record<string, unknown>
+
+  for (const key of texKeys) {
+    const texture = maybeMat[key]
+    if (texture instanceof THREE.Texture) texture.dispose()
+  }
+
+  const uniforms = maybeMat.uniforms
+  if (uniforms && typeof uniforms === "object") {
+    for (const value of Object.values(uniforms as Record<string, { value?: unknown }>)) {
+      if (value?.value instanceof THREE.Texture) value.value.dispose()
+    }
+  }
+
+  mat.dispose()
+}
+
+function disposeSceneGraph(root: THREE.Object3D) {
+  const disposedGeometries = new Set<THREE.BufferGeometry>()
+  const disposedMaterials = new Set<THREE.Material>()
+
+  root.traverse((obj) => {
+    const maybeObj = obj as THREE.Object3D & {
+      geometry?: THREE.BufferGeometry
+      material?: THREE.Material | THREE.Material[]
+    }
+
+    if (maybeObj.geometry && !disposedGeometries.has(maybeObj.geometry)) {
+      disposedGeometries.add(maybeObj.geometry)
+      maybeObj.geometry.dispose()
+    }
+
+    if (maybeObj.material) {
+      if (Array.isArray(maybeObj.material)) {
+        maybeObj.material.forEach((material) => {
+          if (disposedMaterials.has(material)) return
+          disposedMaterials.add(material)
+          disposeMaterial(material)
+        })
+      } else if (!disposedMaterials.has(maybeObj.material)) {
+        disposedMaterials.add(maybeObj.material)
+        disposeMaterial(maybeObj.material)
+      }
+    }
+  })
+}
+
 /* ══════════════════════════════════════════ */
 /*              MAIN COMPONENT               */
 /* ══════════════════════════════════════════ */
-export default function DungeonDice({ targetResults, label, title, comparison, displayTotal, onComplete }: Props) {
+export default function DungeonDice({ targetResults, label, title, comparison, displayTotal, hideContextCard, onComplete }: Props) {
   const mountRef = useRef<HTMLDivElement>(null)
   const rollRef = useRef<{ dice: Die[]; elapsed: number; done: boolean } | null>(null)
   const completedRef = useRef(false)
+  const completeTimerRef = useRef<number | null>(null)
+  const rafRef = useRef<number | null>(null)
   const [settled, setSettled] = useState(false)
   const settledRef = useRef(false)
 
-  const finish = useCallback(() => {
-    if (!completedRef.current) { completedRef.current = true; setTimeout(onComplete, 1500) }
+  const finish = useCallback((delayMs = 1500) => {
+    if (completedRef.current) return
+    completedRef.current = true
+
+    if (completeTimerRef.current !== null) {
+      window.clearTimeout(completeTimerRef.current)
+      completeTimerRef.current = null
+    }
+
+    if (delayMs <= 0) {
+      onComplete()
+      return
+    }
+
+    completeTimerRef.current = window.setTimeout(() => {
+      completeTimerRef.current = null
+      onComplete()
+    }, delayMs)
   }, [onComplete])
 
   useEffect(() => {
@@ -468,16 +539,37 @@ export default function DungeonDice({ targetResults, label, title, comparison, d
       }
 
       ren.render(scene, cam)
-      requestAnimationFrame(animate)
+      rafRef.current = window.requestAnimationFrame(animate)
     }
     animate()
 
     const onR = () => { const w = el.clientWidth, h = el.clientHeight; cam.aspect = w / h; cam.updateProjectionMatrix(); ren.setSize(w, h) }
     window.addEventListener("resize", onR)
-    return () => { alive = false; window.removeEventListener("resize", onR); el.removeChild(ren.domElement); ren.dispose() }
+    return () => {
+      alive = false
+      window.removeEventListener("resize", onR)
+
+      if (rafRef.current !== null) {
+        window.cancelAnimationFrame(rafRef.current)
+        rafRef.current = null
+      }
+
+      if (completeTimerRef.current !== null) {
+        window.clearTimeout(completeTimerRef.current)
+        completeTimerRef.current = null
+      }
+
+      disposeSceneGraph(scene)
+      ren.renderLists.dispose()
+      ren.dispose()
+
+      if (el.contains(ren.domElement)) el.removeChild(ren.domElement)
+      rollRef.current = null
+    }
   }, [targetResults, finish])
 
   const total = displayTotal ?? targetResults.reduce((a, d) => a + d.value, 0)
+  const showContextCard = !hideContextCard && Boolean(title || label || comparison || settled)
 
   return (
     <div style={{
@@ -486,28 +578,40 @@ export default function DungeonDice({ targetResults, label, title, comparison, d
     }}>
       <style>{`
         @keyframes diceIn { from { opacity: 0; } to { opacity: 1; } }
-        @keyframes fadeUp { from { opacity: 0; transform: translateY(20px) scale(0.8); } to { opacity: 1; transform: translateY(0) scale(1); } }
         @keyframes resultBanner { 0% { opacity: 0; transform: scale(1.8); filter: blur(8px); } 50% { opacity: 1; transform: scale(0.95); filter: blur(0); } 100% { opacity: 1; transform: scale(1); filter: blur(0); } }
       `}</style>
       <div ref={mountRef} style={{ width: "100%", height: "100%", position: "absolute", top: 0, left: 0 }} />
       <div style={{ position: "absolute", inset: 0, pointerEvents: "none", background: "radial-gradient(ellipse at 50% 60%, transparent 30%, rgba(0,0,0,.5) 100%)" }} />
-      {/* Result panel -- only shown after dice settle */}
-      {settled && (
+      {/* Context panel: compact during rolling, expands into result panel on settle */}
+      {showContextCard && (
         <div style={{
-          position: "absolute", bottom: 48, left: "50%", transform: "translateX(-50%)",
+          position: "absolute",
+          top: settled ? "72%" : "42px",
+          left: "50%",
+          transform: `translate(-50%, ${settled ? "-50%" : "0"}) scale(${settled ? 1 : 0.82})`,
+          transition: "top .45s cubic-bezier(.22,1,.36,1), transform .45s cubic-bezier(.22,1,.36,1), padding .45s cubic-bezier(.22,1,.36,1), min-width .45s cubic-bezier(.22,1,.36,1), border-color .45s ease, box-shadow .45s ease, background .45s ease",
           pointerEvents: "none", textAlign: "center",
-          background: "linear-gradient(180deg, rgba(10,5,16,.95) 0%, rgba(10,5,16,.85) 80%, rgba(10,5,16,.4) 100%)",
-          padding: "20px 40px 24px", borderRadius: 16, minWidth: 220,
-          border: comparison ? `2px solid ${comparison.success ? "rgba(74,222,128,.4)" : "rgba(248,113,113,.4)"}` : "1px solid rgba(160,128,96,.3)",
-          boxShadow: comparison ? `0 0 40px ${comparison.success ? "rgba(74,222,128,.15)" : "rgba(248,113,113,.15)"}` : "none",
-          animation: "fadeUp .4s ease-out both",
+          background: settled
+            ? "linear-gradient(180deg, rgba(10,5,16,.95) 0%, rgba(10,5,16,.85) 80%, rgba(10,5,16,.4) 100%)"
+            : "linear-gradient(180deg, rgba(10,5,16,.84) 0%, rgba(10,5,16,.7) 100%)",
+          padding: settled ? "20px 40px 24px" : "10px 18px 12px",
+          borderRadius: 16,
+          minWidth: settled ? 220 : 170,
+          border: settled && comparison
+            ? `2px solid ${comparison.success ? "rgba(74,222,128,.4)" : "rgba(248,113,113,.4)"}`
+            : "1px solid rgba(160,128,96,.3)",
+          boxShadow: settled && comparison
+            ? `0 0 40px ${comparison.success ? "rgba(74,222,128,.15)" : "rgba(248,113,113,.15)"}`
+            : "0 0 20px rgba(0,0,0,.2)",
         }}>
           {/* Title */}
           {title && (
             <div style={{
-              fontFamily: "'Cinzel', serif", fontSize: "clamp(14px, 3vw, 20px)",
+              fontFamily: "'Cinzel', serif", fontSize: settled ? "clamp(14px, 3vw, 20px)" : "clamp(11px, 2.1vw, 14px)",
               color: "#c8a878", letterSpacing: 3, textTransform: "uppercase",
-              marginBottom: 8, fontWeight: 700,
+              marginBottom: settled ? 8 : 4, fontWeight: 700,
+              transition: "font-size .35s ease, margin-bottom .35s ease, opacity .25s ease",
+              opacity: settled ? 1 : 0.92,
             }}>
               {title}
             </div>
@@ -515,19 +619,27 @@ export default function DungeonDice({ targetResults, label, title, comparison, d
           {/* Label (sub-heading) */}
           {label && (
             <div style={{
-              fontFamily: "'Cinzel', serif", fontSize: "clamp(11px, 2vw, 15px)",
+              fontFamily: "'Cinzel', serif", fontSize: settled ? "clamp(11px, 2vw, 15px)" : "clamp(10px, 1.9vw, 12px)",
               color: "#8a7a60", letterSpacing: 3, textTransform: "uppercase",
-              marginBottom: 6,
+              marginBottom: settled ? 6 : 2,
+              transition: "font-size .35s ease, margin-bottom .35s ease, opacity .25s ease",
+              opacity: settled ? 0.95 : 0.82,
             }}>
               {label}
             </div>
           )}
           {/* Total */}
-          <div style={{
-            fontFamily: "'Cinzel', serif", fontSize: "clamp(52px, 14vw, 96px)", lineHeight: 1,
-            color: "#ffd666", textShadow: "0 0 40px rgba(255,180,40,.8), 0 0 100px rgba(255,120,0,.4), 0 2px 4px rgba(0,0,0,.9)",
-            fontWeight: 900,
-          }}>
+          <div
+            data-dice-total="true"
+            style={{
+              fontFamily: "'MedievalSharp', cursive", fontSize: "clamp(52px, 14vw, 96px)", lineHeight: 1,
+              color: "#ffd666", textShadow: "0 0 40px rgba(255,180,40,.8), 0 0 100px rgba(255,120,0,.4), 0 2px 4px rgba(0,0,0,.9)",
+              fontWeight: 700,
+              opacity: settled ? 1 : 0,
+              transform: `translateY(${settled ? 0 : 8}px) scale(${settled ? 1 : 0.94})`,
+              transition: "opacity .3s ease, transform .35s cubic-bezier(.22,1,.36,1)",
+            }}
+          >
             {total}
           </div>
           {/* Dice breakdown */}
@@ -566,9 +678,39 @@ export default function DungeonDice({ targetResults, label, title, comparison, d
           )}
         </div>
       )}
+      {!showContextCard && (
+        <div
+          data-dice-total="true"
+          style={{
+            position: "absolute",
+            right: 26,
+            bottom: 22,
+            minWidth: 72,
+            minHeight: 72,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            borderRadius: 4,
+            background: "#eaddcf",
+            border: "2px solid #44403c",
+            boxShadow: "0 10px 28px rgba(0, 0, 0, .35)",
+            transform: `translateY(${settled ? 0 : 10}px) scale(${settled ? 1 : 0.92})`,
+            opacity: settled ? 1 : 0,
+            pointerEvents: "none",
+            fontFamily: "'MedievalSharp', cursive",
+            fontSize: "clamp(32px, 6vw, 42px)",
+            lineHeight: 1,
+            color: "#1c1917",
+            textShadow: "0 1px 0 rgba(255, 255, 255, .55), 0 1px 3px rgba(0, 0, 0, .35)",
+            transition: "opacity .25s ease, transform .3s cubic-bezier(.22,1,.36,1)",
+          }}
+        >
+          {total}
+        </div>
+      )}
       <button
         type="button"
-        onClick={onComplete}
+        onClick={() => finish(0)}
         style={{
           position: "absolute", top: 16, right: 16, zIndex: 110,
           background: "rgba(0,0,0,.6)", border: "1px solid #4a3a28", borderRadius: 8,
