@@ -1,0 +1,17 @@
+{
+  "name": "Fighting Fantasy Companion",
+  "short_name": "FF Companion",
+  "description": "Gamebook companion with dice, combat, map, and inventory tracking",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0c0a09",
+  "theme_color": "#0c0a09",
+  "orientation": "any",
+  "icons": [
+    {
+      "src": "/icon-512.jpg",
+      "sizes": "512x512",
+      "type": "image/jpeg"
+    }
+  ]
+}
