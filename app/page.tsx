@@ -1,17 +1,22 @@
 "use client"
-import React, { Suspense, useState, useReducer, useCallback, useEffect } from "react"
+import React, { Suspense, useState, useReducer, useCallback, useEffect, useRef } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { cn } from "@/lib/utils"
 
 const DungeonDice = React.lazy(() => import("@/components/dungeon-dice"))
+type DieSpec = { value: number; tint?: string }
 interface DiceOpts {
   label?: string
   title?: string
   comparison?: { text: string; success: boolean; successLabel: string; failLabel: string }
   onDone?: () => void
+  displayTotal?: number
+  flyTarget?: string
+  flyValue?: string | number
+  flyColor?: string
 }
-type ShowDiceFn = (results: number[], opts?: DiceOpts) => void
+type ShowDiceFn = (results: DieSpec[], opts?: DiceOpts) => void
 
 /* ── Dice Helpers ── */
 function r1d6() { return Math.floor(Math.random() * 6) + 1 }
@@ -85,7 +90,7 @@ function reducer(s: GS, a: GA): GS {
 const PNL = "rounded-sm border-2 border-stone-700 bg-[#eaddcf] p-4 shadow-md"
 const INK = "text-stone-900"
 const FADED = "text-stone-500"
-const BTN = "bg-stone-800 text-[#eaddcf] border-2 border-stone-600 rounded-sm font-[MedievalSharp] hover:bg-red-900 hover:border-red-950 hover:text-white transition-colors shadow-md"
+const BTN = "bg-stone-800 text-[#eaddcf] border-2 border-stone-600 rounded-sm font-[MedievalSharp] hover:bg-red-900 hover:border-red-950 hover:text-white transition-all shadow-md active:scale-[0.97]"
 
 /* ── LocalStorage ── */
 interface SaveSlot { name: string; date: string; state: GS }
@@ -95,7 +100,7 @@ function writeSaves(s: SaveSlot[]) { localStorage.setItem(LS_SAV, JSON.stringify
 function loadCur(): GS | null { try { const r = localStorage.getItem(LS_CUR); return r ? JSON.parse(r) : null } catch { return null } }
 
 /* ── Stat Pills ── */
-function StatPills({ items, size = "sm" }: { items: [string, string | number, string][]; size?: "sm" | "xs" }) {
+function StatPills({ items, size = "sm", animated = false }: { items: [string, string | number, string][]; size?: "sm" | "xs"; animated?: boolean }) {
   const sz = size === "sm" ? "text-[10px]" : "text-[9px]"
   const vz = size === "sm" ? "text-sm font-bold" : "text-xs font-bold"
   return (
@@ -103,7 +108,7 @@ function StatPills({ items, size = "sm" }: { items: [string, string | number, st
       {items.map(([l, v, c]) => (
         <div key={l} className="flex flex-col items-center">
           <span className={cn(sz, "uppercase tracking-widest font-[Cinzel] text-stone-400")}>{l}</span>
-          <span className={cn(vz, "font-[MedievalSharp]", c)}>{v}</span>
+          <span data-stat={animated ? `header-${l}` : undefined} key={animated ? `${l}-${v}` : undefined} className={cn(vz, "font-[MedievalSharp]", c, animated && "stat-pop")}>{v}</span>
         </div>
       ))}
     </div>
@@ -144,17 +149,17 @@ function Creation({ onCreate, log, showDice }: { onCreate: (sk: number, st: numb
     // Roll Skill: 1d6 + 6
     const sd = r1d6()
     const sk = sd + 6
-    showDice([sd], { title: "Create Hero", label: `Skill: 1d6 + 6 = ${sk}`, onDone: () => {
+    showDice([{ value: sd }], { title: "Create Hero", label: `Skill: 1d6 + 6 = ${sk}`, displayTotal: sk, flyTarget: '[data-stat="creation-skill"]', flyValue: sk, flyColor: '#1e3a8a', onDone: () => {
       setPartial(p => ({ ...p, sk, skRaw: sd }))
       setPhase("stamina")
       const std = r2d6()
       const st = std[0] + std[1] + 12
-      showDice([std[0], std[1]], { title: "Create Hero", label: `Stamina: 2d6 + 12 = ${st}`, onDone: () => {
+      showDice([{ value: std[0] }, { value: std[1] }], { title: "Create Hero", label: `Stamina: 2d6 + 12 = ${st}`, displayTotal: st, flyTarget: '[data-stat="creation-stamina"]', flyValue: st, flyColor: '#7f1d1d', onDone: () => {
         setPartial(p => ({ ...p, st, stRaw: std }))
         setPhase("luck")
         const ld = r1d6()
         const l = ld + 6
-        showDice([ld], { title: "Create Hero", label: `Luck: 1d6 + 6 = ${l}`, onDone: () => {
+        showDice([{ value: ld }], { title: "Create Hero", label: `Luck: 1d6 + 6 = ${l}`, displayTotal: l, flyTarget: '[data-stat="creation-luck"]', flyValue: l, flyColor: '#064e3b', onDone: () => {
           setPartial(p => ({ ...p, l, lRaw: ld }))
           setPhase("done")
           setRolling(false)
@@ -193,9 +198,9 @@ function Creation({ onCreate, log, showDice }: { onCreate: (sk: number, st: numb
               <div key={label} className={cn("rounded-sm border-2 p-3 transition-all duration-300", v != null ? "border-stone-900 bg-white/40" : "border-stone-600/30 bg-white/10")}>
                 <p className={cn("text-xs font-[Cinzel] uppercase tracking-wider mb-1", FADED)}>{label}</p>
                 {v != null ? (
-                  <p className={cn("text-3xl font-bold font-[MedievalSharp] ink-stamp", c)}>{v}</p>
+                  <p data-stat={`creation-${label.toLowerCase()}`} className={cn("text-3xl font-bold font-[MedievalSharp] ink-stamp", c)}>{v}</p>
                 ) : (
-                  <p className={cn("text-3xl font-bold font-[MedievalSharp] text-stone-300 animate-pulse")}>?</p>
+                  <p data-stat={`creation-${label.toLowerCase()}`} className={cn("text-3xl font-bold font-[MedievalSharp] text-stone-300 animate-pulse")}>?</p>
                 )}
               </div>
             ))}
@@ -237,7 +242,7 @@ function Sheet({ s, d }: { s: GS; d: React.Dispatch<GA> }) {
               <span className={cn("font-bold font-[MedievalSharp]", tc)}>{cur}/{max}</span>
             </div>
             <div className="flex items-center gap-2">
-              <div className="h-3 flex-1 overflow-hidden rounded-full bg-stone-300"><div className={cn("h-full rounded-full transition-all", bc)} style={{ width: `${(cur / Math.max(max, 1)) * 100}%` }} /></div>
+              <div className="h-3 flex-1 overflow-hidden rounded-full bg-stone-300"><div className={cn("h-full rounded-full transition-all duration-500 ease-out", bc)} style={{ width: `${(cur / Math.max(max, 1)) * 100}%` }} /></div>
               <button type="button" className="w-8 h-8 rounded-sm border border-stone-600 bg-white/40 text-stone-800 font-bold" onClick={() => adj(type, cur, -1)}>-</button>
               <button type="button" className="w-8 h-8 rounded-sm border border-stone-600 bg-white/40 text-stone-800 font-bold" onClick={() => adj(type, cur, 1)}>+</button>
             </div>
@@ -292,7 +297,7 @@ function Sheet({ s, d }: { s: GS; d: React.Dispatch<GA> }) {
         </div>
         {s.equipment.length > 0 ? (
           <ul className="flex flex-col gap-1">{s.equipment.map((eq, i) => (
-            <li key={`${i}-${eq}`} className="flex items-center justify-between rounded-sm bg-white/30 border border-stone-400 px-3 py-1.5 text-sm font-[Crimson_Text] text-stone-800">
+            <li key={`${i}-${eq}`} className="flex items-center justify-between rounded-sm bg-white/30 border border-stone-400 px-3 py-1.5 text-sm font-[Crimson_Text] text-stone-800 panel-in" style={{ animationDelay: `${i * 30}ms` }}>
               <span>{eq}</span>
               <button type="button" className="text-xs text-red-800 hover:text-red-600 font-[MedievalSharp]" onClick={() => d({ type: "DEL_ITEM", idx: i })}>drop</button>
             </li>
@@ -336,36 +341,115 @@ function Combat({ s, d, showDice }: { s: GS; d: React.Dispatch<GA>; showDice: Sh
 
   function fight(useLuck: boolean) {
     if (!enemy || over || s.stamina <= 0) return
-    d({ type: "DANGER" })
-    const rd = round + 1; setRound(rd)
+    const rd = round + 1
     const hr = r2d6(), ht = hr[0] + hr[1] + s.skill + s.atkMod
     const er = r2d6(), et = er[0] + er[1] + enemy.skill
-    showDice([hr[0], hr[1]])
-    const lines: string[] = []
-    const modStr = s.atkMod !== 0 ? `+${s.atkMod}mod` : ""
-    lines.push(`R${rd}: You [${hr[0]}+${hr[1]}]+${s.skill}${modStr}=${ht} vs ${enemy.name} [${er[0]}+${er[1]}]+${enemy.skill}=${et}`)
-    if (ht > et) {
-      let dmg = 2
-      if (useLuck && s.luck > 0) {
-        const lr = r2d6(), lt = lr[0] + lr[1], lucky = lt <= s.luck
-        d({ type: "SET_LCK", v: s.luck - 1 }); dmg = lucky ? 4 : 1
-        lines.push(`Luck: [${lr[0]}+${lr[1]}]=${lt} vs ${s.luck} -- ${lucky ? "Lucky! 4dmg" : "Unlucky! 1dmg"}`)
-      }
-      const ns = Math.max(0, enemy.stamina - dmg); setEnemy({ ...enemy, stamina: ns })
-      lines.push(`Hit ${enemy.name} for ${dmg}! (${enemy.stamina}->${ns})`); log(`Hit ${enemy.name} for ${dmg}`, "success")
-      if (ns <= 0) { lines.push(`${enemy.name} defeated!`); log(`${enemy.name} defeated!`, "success"); setOver(true); if (queue.length > 0) lines.push(`Next: ${queue[0].name}`) }
-    } else if (et > ht) {
-      let dmg = 2
-      if (useLuck && s.luck > 0) {
-        const lr = r2d6(), lt = lr[0] + lr[1], lucky = lt <= s.luck
-        d({ type: "SET_LCK", v: s.luck - 1 }); dmg = lucky ? 1 : 3
-        lines.push(`Luck: [${lr[0]}+${lr[1]}]=${lt} vs ${s.luck} -- ${lucky ? "Lucky! 1dmg" : "Unlucky! 3dmg"}`)
-      }
-      d({ type: "SET_STA", v: s.stamina - dmg })
-      lines.push(`${enemy.name} hits for ${dmg}! (${s.stamina}->${Math.max(0, s.stamina - dmg)})`); log(`${enemy.name} hit you for ${dmg}`, "danger")
-      if (s.stamina - dmg <= 0) { lines.push("You have fallen..."); log("Defeated!", "danger"); setOver(true) }
-    } else { lines.push("Clash! No damage."); log("Tied -- no damage", "info") }
-    setRlog(p => [...lines, "---", ...p])
+    const modStr = s.atkMod !== 0 ? ` +${s.atkMod}mod` : ""
+
+    const heroWon = ht > et
+    const enemyWon = et > ht
+    const bannerSuccess = heroWon
+
+    const combatDice: DieSpec[] = [
+      { value: hr[0] }, { value: hr[1] },
+      { value: er[0], tint: "#3b1010" }, { value: er[1], tint: "#3b1010" },
+    ]
+
+    showDice(combatDice, {
+      title: `Combat Round ${rd}`,
+      label: `You ${ht} vs ${enemy.name} ${et}`,
+      comparison: {
+        text: `[${hr[0]}+${hr[1]}]+${s.skill}${modStr} = ${ht}  vs  [${er[0]}+${er[1]}]+${enemy.skill} = ${et}`,
+        success: bannerSuccess,
+        successLabel: "HIT!",
+        failLabel: enemyWon ? "WOUNDED!" : "CLASH!",
+      },
+      displayTotal: ht,
+      flyTarget: '[data-combat="hero"]',
+      flyValue: ht,
+      flyColor: '#1e3a8a',
+      onDone: () => {
+        d({ type: "DANGER" })
+        setRound(rd)
+        const lines: string[] = []
+        lines.push(`R${rd}: You [${hr[0]}+${hr[1]}]+${s.skill}${modStr}=${ht} vs ${enemy.name} [${er[0]}+${er[1]}]+${enemy.skill}=${et}`)
+
+        if (heroWon) {
+          let dmg = 2
+          if (useLuck && s.luck > 0) {
+            const lr = r2d6(), lt = lr[0] + lr[1]
+            const curLuck = s.luck
+            const lucky = lt <= curLuck
+            dmg = lucky ? 4 : 1
+            const ns = Math.max(0, enemy.stamina - dmg)
+            // Show luck dice, defer state to luck onDone
+            showDice(lr.map(v => ({ value: v })), {
+              title: "Test Your Luck",
+              label: `Damage Luck: ${lt} vs Luck ${curLuck}`,
+              comparison: {
+                text: `${lt} vs ${curLuck}`,
+                success: lucky,
+                successLabel: "Lucky! 4 damage!",
+                failLabel: "Unlucky! 1 damage!",
+              },
+              onDone: () => {
+                d({ type: "SET_LCK", v: curLuck - 1 })
+                setEnemy({ ...enemy, stamina: ns })
+                lines.push(`Luck: [${lr[0]}+${lr[1]}]=${lt} vs ${curLuck} -- ${lucky ? "Lucky! 4dmg" : "Unlucky! 1dmg"}`)
+                lines.push(`Hit ${enemy.name} for ${dmg}! (${enemy.stamina}->${ns})`)
+                log(`Hit ${enemy.name} for ${dmg}`, "success")
+                if (ns <= 0) { lines.push(`${enemy.name} defeated!`); log(`${enemy.name} defeated!`, "success"); setOver(true) }
+                setRlog(p => [...lines, "---", ...p])
+              },
+            })
+            return
+          }
+          // No luck - apply immediately in this onDone
+          const ns = Math.max(0, enemy.stamina - dmg)
+          setEnemy({ ...enemy, stamina: ns })
+          lines.push(`Hit ${enemy.name} for ${dmg}! (${enemy.stamina}->${ns})`)
+          log(`Hit ${enemy.name} for ${dmg}`, "success")
+          if (ns <= 0) { lines.push(`${enemy.name} defeated!`); log(`${enemy.name} defeated!`, "success"); setOver(true) }
+        } else if (enemyWon) {
+          let dmg = 2
+          if (useLuck && s.luck > 0) {
+            const lr = r2d6(), lt = lr[0] + lr[1]
+            const curLuck = s.luck
+            const lucky = lt <= curLuck
+            dmg = lucky ? 1 : 3
+            const newSta = Math.max(0, s.stamina - dmg)
+            showDice(lr.map(v => ({ value: v })), {
+              title: "Test Your Luck",
+              label: `Defense Luck: ${lt} vs Luck ${curLuck}`,
+              comparison: {
+                text: `${lt} vs ${curLuck}`,
+                success: lucky,
+                successLabel: "Lucky! Only 1 damage!",
+                failLabel: "Unlucky! 3 damage!",
+              },
+              onDone: () => {
+                d({ type: "SET_LCK", v: curLuck - 1 })
+                d({ type: "SET_STA", v: newSta })
+                lines.push(`Luck: [${lr[0]}+${lr[1]}]=${lt} vs ${curLuck} -- ${lucky ? "Lucky! 1dmg" : "Unlucky! 3dmg"}`)
+                lines.push(`${enemy.name} hits for ${dmg}! (${s.stamina}->${newSta})`)
+                log(`${enemy.name} hit you for ${dmg}`, "danger")
+                if (newSta <= 0) { lines.push("You have fallen..."); log("Defeated!", "danger"); setOver(true) }
+                setRlog(p => [...lines, "---", ...p])
+              },
+            })
+            return
+          }
+          d({ type: "SET_STA", v: s.stamina - dmg })
+          lines.push(`${enemy.name} hits for ${dmg}! (${s.stamina}->${Math.max(0, s.stamina - dmg)})`)
+          log(`${enemy.name} hit you for ${dmg}`, "danger")
+          if (s.stamina - dmg <= 0) { lines.push("You have fallen..."); log("Defeated!", "danger"); setOver(true) }
+        } else {
+          lines.push("Clash! No damage.")
+          log("Tied -- no damage", "info")
+        }
+        setRlog(p => [...lines, "---", ...p])
+      },
+    })
   }
 
   return (
@@ -405,14 +489,14 @@ function Combat({ s, d, showDice }: { s: GS; d: React.Dispatch<GA>; showDice: Sh
         </div>
       ) : (
         <div className="flex flex-col gap-4">
-          <div className="rounded-sm border-2 border-red-800 bg-red-50/60 p-4">
-            <div className="flex items-center justify-between mb-2"><h3 className="font-bold text-red-900 font-[Cinzel]">{enemy.name}</h3><span className={cn("text-xs font-[Crimson_Text]", FADED)}>Skill {enemy.skill} | Round {round}{queue.length > 0 ? ` | ${queue.length} queued` : ""}</span></div>
-            <div className="h-3 w-full overflow-hidden rounded-full bg-stone-300"><div className="h-full rounded-full bg-red-700 transition-all" style={{ width: `${(enemy.stamina / enemy.maxStamina) * 100}%` }} /></div>
+          <div key={`enemy-${enemy.stamina}`} className="rounded-sm border-2 border-red-800 bg-red-50/60 p-4 combat-hit-red">
+            <div className="flex items-center justify-between mb-2"><h3 data-combat="enemy" className="font-bold text-red-900 font-[Cinzel]">{enemy.name}</h3><span className={cn("text-xs font-[Crimson_Text]", FADED)}>Skill {enemy.skill} | Round {round}{queue.length > 0 ? ` | ${queue.length} queued` : ""}</span></div>
+            <div className="h-3 w-full overflow-hidden rounded-full bg-stone-300"><div className="h-full rounded-full bg-red-700 transition-all duration-500 ease-out" style={{ width: `${(enemy.stamina / enemy.maxStamina) * 100}%` }} /></div>
             <p className={cn("mt-1 text-xs font-[Crimson_Text]", FADED)}>Stamina: {enemy.stamina}/{enemy.maxStamina}</p>
           </div>
-          <div className="rounded-sm border-2 border-blue-800 bg-blue-50/60 p-4">
-            <div className="flex items-center justify-between mb-2"><h3 className="font-bold text-blue-900 font-[Cinzel]">You</h3><span className={cn("text-xs font-[Crimson_Text]", FADED)}>Skill {s.skill}{s.atkMod !== 0 ? ` (${s.atkMod >= 0 ? "+" : ""}${s.atkMod})` : ""} | Luck {s.luck}</span></div>
-            <div className="h-3 w-full overflow-hidden rounded-full bg-stone-300"><div className="h-full rounded-full bg-blue-700 transition-all" style={{ width: `${(s.stamina / s.mStamina) * 100}%` }} /></div>
+          <div key={`hero-${s.stamina}`} className="rounded-sm border-2 border-blue-800 bg-blue-50/60 p-4 combat-hit-blue">
+            <div className="flex items-center justify-between mb-2"><h3 data-combat="hero" className="font-bold text-blue-900 font-[Cinzel]">You</h3><span className={cn("text-xs font-[Crimson_Text]", FADED)}>Skill {s.skill}{s.atkMod !== 0 ? ` (${s.atkMod >= 0 ? "+" : ""}${s.atkMod})` : ""} | Luck {s.luck}</span></div>
+            <div className="h-3 w-full overflow-hidden rounded-full bg-stone-300"><div className="h-full rounded-full bg-blue-700 transition-all duration-500 ease-out" style={{ width: `${(s.stamina / s.mStamina) * 100}%` }} /></div>
             <p className={cn("mt-1 text-xs font-[Crimson_Text]", FADED)}>Stamina: {s.stamina}/{s.mStamina}</p>
           </div>
           <div className="flex gap-3">
@@ -432,7 +516,7 @@ function Roller({ log, showDice }: { log: (t: string, ty: Log["type"]) => void; 
   const [res, setRes] = useState<number[] | null>(null)
   function roll(n: number) {
     const dice = Array.from({ length: n }, () => r1d6())
-    showDice(dice)
+    showDice(dice.map(v => ({ value: v })))
     setRes(dice)
     const total = dice.reduce((a, b) => a + b, 0)
     log(`Rolled ${n}d6: [${dice.join("+")}] = ${total}`, "info")
@@ -461,7 +545,7 @@ function Tests({ s, d, showDice }: { s: GS; d: React.Dispatch<GA>; showDice: Sho
   function testLuck() {
     const dice = r2d6()
     const total = dice[0] + dice[1], pass = total <= s.luck
-    showDice(dice, {
+    showDice(dice.map(v => ({ value: v })), {
       title: "Test Your Luck",
       label: `Roll 2d6 vs Luck ${s.luck}`,
       comparison: { text: `${total} vs ${s.luck}`, success: pass, successLabel: "Lucky!", failLabel: "Unlucky!" },
@@ -473,7 +557,7 @@ function Tests({ s, d, showDice }: { s: GS; d: React.Dispatch<GA>; showDice: Sho
   function testSkill() {
     const dice = r2d6()
     const total = dice[0] + dice[1], pass = total <= s.skill
-    showDice(dice, {
+    showDice(dice.map(v => ({ value: v })), {
       title: "Test Your Skill",
       label: `Roll 2d6 vs Skill ${s.skill}`,
       comparison: { text: `${total} vs ${s.skill}`, success: pass, successLabel: "Passed!", failLabel: "Failed!" },
@@ -544,11 +628,45 @@ function ActivityLog({ log }: { log: Log[] }) {
   return (
     <div className={cn(PNL, "max-h-56 overflow-y-auto")}>
       <h3 className={cn("mb-3 text-sm font-bold font-[Cinzel] uppercase tracking-wider", FADED)}>Adventure Log</h3>
-      {log.map(l => {
-        const rot = `${(Math.random() - 0.5) * 1.5}deg`
-        return <p key={l.id} className={cn("text-xs font-[Crimson_Text] leading-relaxed log-entry", clr[l.type])} style={{ "--rot": rot } as React.CSSProperties}>{l.text}</p>
+      {log.map((l, i) => {
+        const rot = `${((l.id * 7 + 3) % 15 - 7) * 0.2}deg`
+        const delay = i < 5 ? `${i * 40}ms` : undefined
+        return <p key={l.id} className={cn("text-xs font-[Crimson_Text] leading-relaxed log-entry", clr[l.type])} style={{ "--rot": rot, animationDelay: delay } as React.CSSProperties}>{l.text}</p>
       })}
     </div>
+  )
+}
+
+/* ── Flying Number ── */
+interface FlyingNum { id: number; value: string | number; fromX: number; fromY: number; toX: number; toY: number; color: string }
+
+function FlyingNumber({ num, onDone }: { num: FlyingNum; onDone: () => void }) {
+  const [arrived, setArrived] = useState(false)
+  const doneRef = useRef(onDone)
+  doneRef.current = onDone
+  useEffect(() => {
+    requestAnimationFrame(() => requestAnimationFrame(() => setArrived(true)))
+    const t = setTimeout(() => doneRef.current(), 650)
+    return () => clearTimeout(t)
+  }, [])
+  return (
+    <div className="flying-number" style={{
+      position: 'fixed', zIndex: 9999, pointerEvents: 'none',
+      left: arrived ? num.toX : num.fromX,
+      top: arrived ? num.toY : num.fromY,
+      transform: 'translate(-50%, -50%)',
+      transition: arrived
+        ? 'left 500ms cubic-bezier(0.34,1.56,0.64,1), top 500ms cubic-bezier(0.34,1.56,0.64,1), font-size 500ms cubic-bezier(0.34,1.56,0.64,1), color 500ms ease-out, text-shadow 500ms ease-out, opacity 150ms ease-out 400ms'
+        : 'none',
+      fontSize: arrived ? 18 : 48,
+      fontFamily: 'MedievalSharp, cursive',
+      fontWeight: 'bold',
+      color: arrived ? num.color : '#ffd666',
+      textShadow: arrived
+        ? '0 1px 3px rgba(0,0,0,.4)'
+        : '0 0 30px rgba(255,180,40,.6), 0 2px 8px rgba(0,0,0,.9)',
+      opacity: arrived ? 0 : 1,
+    }}>{num.value}</div>
   )
 }
 
@@ -632,10 +750,29 @@ export default function Page() {
     return saved && typeof saved.created === "boolean" ? saved : initial
   })
   const [tab, setTab] = useState<Tab>("explore")
+  const [tabKey, setTabKey] = useState(0)
   const addLog = useCallback((t: string, ty: Log["type"]) => d({ type: "LOG", text: t, lt: ty }), [])
-  const [diceModal, setDiceModal] = useState<{ results: number[] } & DiceOpts | null>(null)
+  const [diceModal, setDiceModal] = useState<{ results: DieSpec[] } & DiceOpts | null>(null)
+  const [diceKey, setDiceKey] = useState(0)
+  const [diceExiting, setDiceExiting] = useState(false)
+  const [showCreation, setShowCreation] = useState(!s.created)
+  const [creationFading, setCreationFading] = useState(false)
+  const [flyingNums, setFlyingNums] = useState<FlyingNum[]>([])
+  const flyIdRef = useRef(0)
+  const diceWrapperRef = useRef<HTMLDivElement>(null)
 
-  const showDice: ShowDiceFn = useCallback((results, opts) => setDiceModal({ results, ...opts }), [])
+  const spawnFly = useCallback((value: string | number, fromX: number, fromY: number, toSelector: string, color: string) => {
+    const el = document.querySelector(toSelector)
+    if (!el) return
+    const r = el.getBoundingClientRect()
+    const id = ++flyIdRef.current
+    setFlyingNums(prev => [...prev, { id, value, fromX, fromY, toX: r.left + r.width / 2, toY: r.top + r.height / 2, color }])
+  }, [])
+
+  const showDice: ShowDiceFn = useCallback((results, opts) => {
+    setDiceKey(k => k + 1)
+    setDiceModal({ results, ...opts })
+  }, [])
 
   // Auto-save
   useEffect(() => {
@@ -669,20 +806,39 @@ export default function Page() {
         .ink-stamp{animation:inkStamp .25s ease-out forwards}
         .log-entry{transform:rotate(var(--rot,0deg));animation:inkStamp .2s ease-out}
         .vignette{background:radial-gradient(circle at 50% 50%,transparent 35%,rgba(0,0,0,.85) 100%);animation:flicker 4s ease-in-out infinite}
+        @keyframes diceOut{to{opacity:0;transform:scale(1.02)}}
+        .animate-dice-out{animation:diceOut .25s ease-in forwards;pointer-events:none}
+        @keyframes tabIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+        .animate-tab-in{animation:tabIn .2s ease-out}
+        @keyframes creationOut{to{opacity:0;transform:translateY(-20px) scale(0.95);filter:blur(2px)}}
+        .animate-creation-out{animation:creationOut .4s ease-in forwards}
+        @keyframes gameIn{from{opacity:0;transform:translateY(20px)}to{opacity:1;transform:translateY(0)}}
+        .animate-game-in{animation:gameIn .5s ease-out .1s both}
+        @keyframes fadeIn{from{opacity:0}to{opacity:1}}
+        .animate-fade-in{animation:fadeIn .4s ease-out}
+        @keyframes statPop{0%{transform:scale(1.3);color:#fbbf24}100%{transform:scale(1)}}
+        .stat-pop{animation:statPop .3s ease-out}
+        @keyframes panelIn{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}
+        .panel-in{animation:panelIn .3s ease-out both}
+        @keyframes combatHitRed{0%{box-shadow:0 0 20px rgba(248,113,113,.6),inset 0 0 10px rgba(248,113,113,.15)}100%{box-shadow:none}}
+        .combat-hit-red{animation:combatHitRed .6s ease-out}
+        @keyframes combatHitBlue{0%{box-shadow:0 0 20px rgba(96,165,250,.6),inset 0 0 10px rgba(96,165,250,.15)}100%{box-shadow:none}}
+        .combat-hit-blue{animation:combatHitBlue .6s ease-out}
+        .flying-number{will-change:transform,left,top,opacity}
       `}</style>
 
       <div className="min-h-screen bg-stone-950 text-stone-900 relative flex flex-col">
         <div className="fixed inset-0 pointer-events-none z-[200] vignette" />
 
         {/* Header */}
-        <header className="border-b-4 border-double border-stone-700 bg-stone-900 px-4 py-4 relative z-10 shrink-0">
+        <header className={cn("border-b-4 border-double border-stone-700 bg-stone-900 px-4 py-4 relative z-10 shrink-0 transition-[filter] duration-300", diceModal && "blur-[2px] brightness-90")}>
           <div className="mx-auto flex max-w-2xl items-center justify-between">
             <div>
               <h1 className="text-xl font-bold tracking-wider text-[#eaddcf] font-[Cinzel] uppercase">Fighting Fantasy</h1>
               <p className="text-[10px] text-stone-500 tracking-widest font-[Cinzel] uppercase">Gamebook Companion</p>
             </div>
             {s.created && (
-              <StatPills items={[
+              <StatPills animated items={[
                 ["SKL", s.skill, "text-stone-300"], ["STA", s.stamina, "text-red-300"],
                 ["LCK", s.luck, "text-emerald-300"], ["PRV", s.provisions, "text-amber-300"],
                 ["GLD", s.gold, "text-yellow-200"],
@@ -692,26 +848,49 @@ export default function Page() {
         </header>
 
         {/* Main Content */}
-        <main className="flex-1 overflow-y-auto relative z-10 pb-20">
+        <main className={cn("flex-1 overflow-y-auto relative z-10 pb-20 transition-[filter] duration-300", diceModal && "blur-[2px] brightness-90")}>
           <div className="mx-auto max-w-2xl px-4 py-6">
-            {!s.created ? (
-              <div className="py-8"><Creation onCreate={(sk, st, l) => d({ type: "CREATE", skill: sk, stamina: st, luck: l })} log={addLog} showDice={showDice} /></div>
-            ) : (
-              <div className="flex flex-col gap-6">
-                {tab === "explore" && (<><MapView s={s} d={d} /><ActivityLog log={s.log} /></>)}
-                {tab === "encounter" && (<><Combat s={s} d={d} showDice={showDice} /><Tests s={s} d={d} showDice={showDice} /><Roller log={addLog} showDice={showDice} /><ActivityLog log={s.log} /></>)}
-                {tab === "equipment" && (<><Sheet s={s} d={d} /><Saves s={s} d={d} onLoad={(state) => d({ type: "LOAD_STATE", state })} /></>)}
+            {showCreation ? (
+              <div className={cn("py-8", creationFading && "animate-creation-out")}><Creation onCreate={(sk, st, l) => {
+                const cardPositions = (['skill', 'stamina', 'luck'] as const).map(stat => {
+                  const el = document.querySelector(`[data-stat="creation-${stat}"]`)
+                  return el?.getBoundingClientRect()
+                })
+                setCreationFading(true)
+                setTimeout(() => {
+                  d({ type: "CREATE", skill: sk, stamina: st, luck: l })
+                  setShowCreation(false)
+                  setCreationFading(false)
+                  requestAnimationFrame(() => requestAnimationFrame(() => {
+                    const targets: { value: number; target: string; color: string }[] = [
+                      { value: sk, target: '[data-stat="header-SKL"]', color: '#cbd5e1' },
+                      { value: st, target: '[data-stat="header-STA"]', color: '#fca5a5' },
+                      { value: l, target: '[data-stat="header-LCK"]', color: '#6ee7b7' },
+                    ]
+                    targets.forEach(({ value, target, color }, i) => {
+                      const from = cardPositions[i]
+                      if (!from) return
+                      setTimeout(() => spawnFly(value, from.left + from.width / 2, from.top + from.height / 2, target, color), i * 100)
+                    })
+                  }))
+                }, 400)
+              }} log={addLog} showDice={showDice} /></div>
+            ) : s.created ? (
+              <div key={tabKey} className="flex flex-col gap-6 animate-tab-in animate-game-in">
+                {tab === "explore" && (<><div className="panel-in" style={{ animationDelay: "0ms" }}><MapView s={s} d={d} /></div><div className="panel-in" style={{ animationDelay: "80ms" }}><ActivityLog log={s.log} /></div></>)}
+                {tab === "encounter" && (<><div className="panel-in" style={{ animationDelay: "0ms" }}><Combat s={s} d={d} showDice={showDice} /></div><div className="panel-in" style={{ animationDelay: "80ms" }}><Tests s={s} d={d} showDice={showDice} /></div><div className="panel-in" style={{ animationDelay: "160ms" }}><Roller log={addLog} showDice={showDice} /></div><div className="panel-in" style={{ animationDelay: "240ms" }}><ActivityLog log={s.log} /></div></>)}
+                {tab === "equipment" && (<><div className="panel-in" style={{ animationDelay: "0ms" }}><Sheet s={s} d={d} /></div><div className="panel-in" style={{ animationDelay: "80ms" }}><Saves s={s} d={d} onLoad={(state) => d({ type: "LOAD_STATE", state })} /></div></>)}
               </div>
-            )}
+            ) : null}
           </div>
         </main>
 
         {/* Bottom Tab Bar */}
-        {s.created && (
-          <nav className="fixed bottom-0 left-0 right-0 z-40 border-t-4 border-double border-stone-700 bg-stone-900" aria-label="Game sections">
+        {s.created && !showCreation && (
+          <nav className="fixed bottom-0 left-0 right-0 z-40 border-t-4 border-double border-stone-700 bg-stone-900 animate-fade-in" aria-label="Game sections">
             <div className="mx-auto max-w-2xl flex">
               {tabs.map(t => (
-                <button key={t.key} type="button" onClick={() => setTab(t.key)}
+                <button key={t.key} type="button" onClick={() => { setTab(t.key); setTabKey(k => k + 1) }}
                   className={cn("flex-1 flex flex-col items-center gap-1 py-3 transition-colors", tab === t.key ? "bg-stone-800 text-[#eaddcf]" : "text-stone-500 hover:text-stone-300 hover:bg-stone-800/50")}>
                   <TabIcon icon={t.icon} active={tab === t.key} />
                   <span className={cn("text-[11px] font-[MedievalSharp] tracking-wide", tab === t.key ? "text-amber-400" : "text-stone-500")}>{t.label}</span>
@@ -723,7 +902,7 @@ export default function Page() {
         )}
 
         {/* Footer (pre-creation only) */}
-        {!s.created && (
+        {showCreation && (
           <footer className="border-t-4 border-double border-stone-700 bg-stone-900 px-4 py-3 relative z-10 shrink-0">
             <p className="text-center text-xs text-stone-600 font-[Crimson_Text] italic">Based on the Fighting Fantasy game system by Steve Jackson and Ian Livingstone</p>
           </footer>
@@ -733,9 +912,41 @@ export default function Page() {
       {/* 3D Dice Modal */}
       {diceModal && (
         <Suspense fallback={<div className="fixed inset-0 z-[100] bg-black/80 flex items-center justify-center"><span className="text-amber-400 font-[Cinzel] text-lg animate-pulse">Loading dice...</span></div>}>
-          <DungeonDice targetResults={diceModal.results} label={diceModal.label} title={diceModal.title} comparison={diceModal.comparison} onComplete={() => { const cb = diceModal.onDone; setDiceModal(null); cb?.() }} />
+          <div ref={diceWrapperRef} className={diceExiting ? "animate-dice-out" : ""}>
+            <DungeonDice key={diceKey} targetResults={diceModal.results} label={diceModal.label} title={diceModal.title} comparison={diceModal.comparison} displayTotal={diceModal.displayTotal} onComplete={() => {
+              const cb = diceModal.onDone
+              if (diceModal.flyTarget && diceModal.flyValue != null) {
+                let fromX = window.innerWidth / 2, fromY = window.innerHeight * 0.55
+                const wrapper = diceWrapperRef.current
+                if (wrapper) {
+                  const divs = wrapper.querySelectorAll('div')
+                  for (const el of divs) {
+                    const fs = parseFloat(getComputedStyle(el).fontSize)
+                    if (fs > 40) {
+                      const rect = el.getBoundingClientRect()
+                      fromX = rect.left + rect.width / 2
+                      fromY = rect.top + rect.height / 2
+                      break
+                    }
+                  }
+                }
+                spawnFly(diceModal.flyValue, fromX, fromY, diceModal.flyTarget, diceModal.flyColor || '#ffd666')
+              }
+              setDiceExiting(true)
+              setTimeout(() => {
+                setDiceExiting(false)
+                setDiceModal(null)
+                if (cb) queueMicrotask(cb)
+              }, 250)
+            }} />
+          </div>
         </Suspense>
       )}
+
+      {/* Flying Numbers */}
+      {flyingNums.map(f => (
+        <FlyingNumber key={f.id} num={f} onDone={() => setFlyingNums(p => p.filter(n => n.id !== f.id))} />
+      ))}
     </>
   )
 }

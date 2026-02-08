@@ -5,6 +5,10 @@ import { useState } from "react"
 import * as THREE from "three"
 
 /* ── Props ── */
+export interface DieSpec {
+  value: number        // face value 1-6
+  tint?: string        // hex color for dice body (default: "#fffbf0", enemy: "#3b1010")
+}
 interface Comparison {
   text: string          // e.g. "7 vs Luck 9"
   success: boolean
@@ -12,10 +16,11 @@ interface Comparison {
   failLabel: string     // e.g. "UNLUCKY!"
 }
 interface Props {
-  targetResults: number[]
+  targetResults: DieSpec[]
   label?: string
   title?: string
   comparison?: Comparison
+  displayTotal?: number
   onComplete: () => void
 }
 
@@ -56,13 +61,13 @@ vec3 cl=mix(vec3(.4,.1,.8),vec3(.7,.4,1.),r*2.)*p;cl+=vec3(1.,.8,.5)*inner*uGlow
 float al=p*(.5+.3*sin(uTime*2.));gl_FragColor=vec4(cl,al*.6);}`
 
 /* ── Pip Texture ── */
-function pipTex(num: number) {
+function pipTex(num: number, bodyColor = "#fffbf0", pipColor = "#1a1412", borderColor = "#c8b890") {
   const s = 256, cv = document.createElement("canvas")
   cv.width = cv.height = s
   const ctx = cv.getContext("2d")!
-  ctx.fillStyle = "#fffbf0"; ctx.fillRect(0, 0, s, s)
-  ctx.strokeStyle = "#c8b890"; ctx.lineWidth = 6; ctx.strokeRect(8, 8, s - 16, s - 16)
-  ctx.fillStyle = "#1a1412"
+  ctx.fillStyle = bodyColor; ctx.fillRect(0, 0, s, s)
+  ctx.strokeStyle = borderColor; ctx.lineWidth = 6; ctx.strokeRect(8, 8, s - 16, s - 16)
+  ctx.fillStyle = pipColor
   const pip = (x: number, y: number) => { ctx.beginPath(); ctx.arc(x * s, y * s, s * .08, 0, Math.PI * 2); ctx.fill() }
   const P: Record<number, number[][]> = {
     1: [[.5,.5]], 2: [[.3,.3],[.7,.7]], 3: [[.3,.3],[.5,.5],[.7,.7]],
@@ -297,7 +302,7 @@ function updFlame(f: ReturnType<typeof mkFlame>, dt: number) {
 /* ══════════════════════════════════════════ */
 /*              MAIN COMPONENT               */
 /* ══════════════════════════════════════════ */
-export default function DungeonDice({ targetResults, label, title, comparison, onComplete }: Props) {
+export default function DungeonDice({ targetResults, label, title, comparison, displayTotal, onComplete }: Props) {
   const mountRef = useRef<HTMLDivElement>(null)
   const rollRef = useRef<{ dice: Die[]; elapsed: number; done: boolean } | null>(null)
   const completedRef = useRef(false)
@@ -381,12 +386,25 @@ export default function DungeonDice({ targetResults, label, title, comparison, o
     const fl2 = mkFlame(); fl2.pts.position.copy(t2P); scene.add(fl2.pts)
 
     // Dice meshes
+    const MAX_DICE = 6
     const dSz = .55, fOrder = [3, 4, 1, 6, 2, 5]
-    const dMats = fOrder.map(n => new THREE.MeshStandardMaterial({ map: pipTex(n), roughness: .3, metalness: .05 }))
+
+    // Per-die materials based on tint
+    const allDieMats: THREE.MeshStandardMaterial[][] = []
+    for (let i = 0; i < MAX_DICE; i++) {
+      const spec = targetResults[i]
+      const body = spec?.tint ?? "#fffbf0"
+      const dark = spec?.tint ? parseInt(spec.tint.slice(1, 3), 16) < 0x80 : false
+      const pip = dark ? "#fffbf0" : "#1a1412"
+      const border = dark ? "#5a3030" : "#c8b890"
+      const mats = fOrder.map(n => new THREE.MeshStandardMaterial({ map: pipTex(n, body, pip, border), roughness: .3, metalness: .05 }))
+      allDieMats.push(mats)
+    }
+
     const dGeo = new THREE.BoxGeometry(dSz, dSz, dSz)
     const meshes: THREE.Mesh[] = []
-    for (let i = 0; i < 3; i++) {
-      const m = new THREE.Mesh(dGeo, dMats); m.castShadow = true; m.receiveShadow = true
+    for (let i = 0; i < MAX_DICE; i++) {
+      const m = new THREE.Mesh(dGeo, allDieMats[i]); m.castShadow = true; m.receiveShadow = true
       m.visible = false; m.position.set(0, tY + 3, 0); scene.add(m); meshes.push(m)
     }
 
@@ -398,11 +416,12 @@ export default function DungeonDice({ targetResults, label, title, comparison, o
 
     // ── Start Roll Immediately ──
     const numD = targetResults.length, hs = dSz / 2, tHW = 1.4, tHD = 1.1
+    const spacing = numD <= 4 ? 0.7 : 0.55
     const pDice: Die[] = []
-    for (let i = 0; i < Math.min(numD, 3); i++) {
+    for (let i = 0; i < numD; i++) {
       meshes[i].visible = true
-      const pd = mkDie(hs, tY, tHW, tHD, targetResults[i])
-      const spX = numD > 1 ? (i - (numD - 1) / 2) * 0.7 : 0
+      const pd = mkDie(hs, tY, tHW, tHD, targetResults[i].value)
+      const spX = numD > 1 ? (i - (numD - 1) / 2) * spacing : 0
       pd.pos.set(spX + (Math.random() - .5) * .2, tY + 1.5 + Math.random() * .3 + i * .15, 2 + Math.random() * .3)
       pd.vel.set((Math.random() - .5) * .8 - spX * .3, 2.5 + Math.random() * 1.5, -3 - Math.random() * 1.2)
       const ss = () => Math.random() > .5 ? 1 : -1
@@ -411,7 +430,7 @@ export default function DungeonDice({ targetResults, label, title, comparison, o
       meshes[i].position.copy(pd.pos); meshes[i].quaternion.copy(pd.quat)
       pDice.push(pd)
     }
-    for (let i = numD; i < 3; i++) meshes[i].visible = false
+    for (let i = numD; i < MAX_DICE; i++) meshes[i].visible = false
     rollRef.current = { dice: pDice, elapsed: 0, done: false }
 
     // ── Animation Loop ──
@@ -458,7 +477,7 @@ export default function DungeonDice({ targetResults, label, title, comparison, o
     return () => { alive = false; window.removeEventListener("resize", onR); el.removeChild(ren.domElement); ren.dispose() }
   }, [targetResults, finish])
 
-  const total = targetResults.reduce((a, b) => a + b, 0)
+  const total = displayTotal ?? targetResults.reduce((a, d) => a + d.value, 0)
 
   return (
     <div style={{
@@ -512,13 +531,13 @@ export default function DungeonDice({ targetResults, label, title, comparison, o
             {total}
           </div>
           {/* Dice breakdown */}
-          {targetResults.length > 1 && (
+          {!displayTotal && targetResults.length > 1 && (
             <div style={{
               fontFamily: "'Cinzel', serif", fontSize: "clamp(16px, 3vw, 24px)",
               color: "#d4a860", marginTop: 6, letterSpacing: 4,
               textShadow: "0 0 12px rgba(255,180,40,.4)",
             }}>
-              {targetResults.join("  +  ")}
+              {targetResults.map(d => d.value).join("  +  ")}
             </div>
           )}
           {/* Comparison line */}
